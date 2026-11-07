@@ -1,278 +1,280 @@
-# MC ConVar 说明
+# MC ConVar reference
 
-这个文件汇总本 addon 当前创建的 `mc_*` ConVar。默认值来自源码里的 `CreateConVar` / `CreateClientConVar`；带 `约` 的默认值是 Lua 常量计算后的数值。
+English | [简体中文](docs/zh/convar.md)
 
-## 先看这几个
+This file summarizes the addon’s registered `mc_*` ConVars. Defaults come from source `CreateConVar` / `CreateClientConVar` calls; defaults marked `approx.` are evaluated Lua constants.
 
-| 需求 | 主要 ConVar | 说明 |
+## Start here
+
+| Goal | Main ConVars | Explanation |
 | --- | --- | --- |
-| 开启 GPU 光照路径 | `mc_light_shader 1`, `mc_light_texture 1`, `mc_lightmap 1` | 使用自定义 chunk shader、GPU chunk light texture 和全局 16x16 lightmap。 |
-| 切换 GPU 光照观感 | `mc_light_style fancy/plain/fast/vanilla` | `fancy` 是默认阴影+冷暖调色；`plain` 是平滑无调色；`fast` 是低采样旧观感；`vanilla` 是原版 Minecraft lightmap 合成。 |
-| 让夜晚更暗蓝 | `mc_daycycle 1`, `mc_daycycle_moon_light`, `mc_daycycle_night_tint`, `mc_lightmap_ambient` | `moon_light` 控夜晚天光等级，`night_tint` 控蓝色夜色，`ambient` 控 GPU lightmap 最低亮度。 |
-| 让阴影处更黑 | `mc_shadow 1`, `mc_shadow_strength`, `mc_shadow_face_shade`, `mc_lightmap_ambient` | 阴影暗度走 shadow map 和 fancy shader。 |
-| 封闭空间变暗 | `mc_light_sky_flood 1`, `mc_lightmap_ambient`, `mc_lightmap_sky_min` | 体素天空光泛洪(露天 15,横向每格 -1,全封闭 0)。着色器里直射阳光按体素天空光门控:全封闭格子收不到直射阳光,不再需要把 `mc_shadow_strength` 拉满;室内亮度由 `ambient`(绝对底光)和 `sky_min`(天空环境光底比例)直接控制。 |
-| 区分两个最低亮度 | `mc_light_ambient_min`, `mc_lightmap_ambient` | 前者是 CPU/vertex-color 路径最低亮度；后者是 GPU global lightmap 最低亮度。 |
+| Enable GPU lighting | `mc_light_shader 1`, `mc_light_texture 1`, `mc_lightmap 1` | Use the custom chunk shader, GPU chunk light textures, and global 16x16 lightmap. |
+| Change GPU lighting style | `mc_light_style fancy/plain/fast/vanilla` | fancy is the default with shadows and warm/cool grading; plain is smooth without grading; fast is the legacy low-sample appearance; vanilla uses original Minecraft lightmap composition. |
+| Make nights darker and bluer | `mc_daycycle 1`, `mc_daycycle_moon_light`, `mc_daycycle_night_tint`, `mc_lightmap_ambient` | moon_light controls night skylight level, night_tint controls the blue tint, and ambient controls the GPU lightmap brightness floor. |
+| Darken shadows | `mc_shadow 1`, `mc_shadow_strength`, `mc_shadow_face_shade`, `mc_lightmap_ambient` | Shadow darkness uses the shadow map and fancy shader. |
+| Darken enclosed spaces | `mc_light_sky_flood 1`, `mc_lightmap_ambient`, `mc_lightmap_sky_min` | Voxel skylight flood fill: 15 outdoors, -1 per horizontal block, 0 fully enclosed. The shader gates direct sunlight by voxel skylight, so enclosed cells receive no direct sunlight without maximizing mc_shadow_strength. ambient sets the absolute light floor; sky_min sets the ambient-skylight floor fraction. |
+| Distinguish the brightness floors | `mc_light_ambient_min`, `mc_lightmap_ambient` | The former controls the CPU/vertex-color path; the latter controls the GPU global lightmap. |
 
-## 服务器：权限、世界和批量操作
+## Server: permissions, world, and bulk operations
 
-这些大多是服务器端、归档、通知并复制到客户端的配置。
+Most of these settings are server-side, archived, notified, and replicated to clients.
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_admin_only` | `0` | 只允许管理员放置、破坏方块；也影响部分预设操作权限。 |
-| `mc_world_limit` | `1024` | 限制每个方块坐标轴距离原点的最大绝对值。 |
-| `mc_max_blocks` | `0` | 全局方块数量上限；`0` 表示不限。 |
-| `mc_reach` | 约 `182.5` | 玩家放置/破坏 MC 方块的最大距离；`0` 表示关闭距离限制。 |
-| `mc_fill_max` | `100000` | 单次 `/fill` 最多修改的方块数；`0` 表示不限。 |
-| `mc_fill_batch_cells` | `4096` | `/fill` 每个服务器批次最多应用多少格。 |
-| `mc_fill_batch_chunks` | `16` | `/fill` 每个服务器批次最多触碰多少 chunk。 |
-| `mc_fill_batch_interval` | `0.05` | `/fill` 批次之间的间隔秒数，用来分摊卡顿。 |
-| `mc_import_max` | `0` | 单次 `mc_import` 最多导入多少方块；`0` 表示不限。 |
-| `mc_autosave` | `0` | 自动保存间隔秒数；`0` 表示关闭。 |
-| `mc_save_public` | `0` | 是否允许非管理员列出、读取、保存 MC 存档；删除仍然只限管理员。 |
-| `mc_preset_public` | `0` | 是否允许非管理员列出、读取、保存和放置建筑预设。 |
-| `mc_preset_max_blocks` | `100000` | 单个建筑预设最多保存/放置的非空气方块数；`0` 表示不限。 |
+| `mc_admin_only` | `0` | Restrict block placement/breaking to administrators; also affects some preset permissions. |
+| `mc_world_limit` | `1024` | Maximum absolute distance from the origin on each block-coordinate axis. |
+| `mc_max_blocks` | `0` | Global block count limit; 0 unlimited. |
+| `mc_reach` | approx. `182.5` | Maximum player distance for placing/breaking MC blocks; 0 disables the distance limit. |
+| `mc_fill_max` | `100000` | Maximum cells modified by one /fill; 0 unlimited. |
+| `mc_fill_batch_cells` | `4096` | Maximum cells applied per server /fill batch. |
+| `mc_fill_batch_chunks` | `16` | Maximum chunks touched per server /fill batch. |
+| `mc_fill_batch_interval` | `0.05` | Seconds between /fill batches to spread out hitches. |
+| `mc_import_max` | `0` | Maximum blocks imported by one mc_import; 0 unlimited. |
+| `mc_autosave` | `0` | Autosave interval in seconds; 0 disables it. |
+| `mc_save_public` | `0` | Allow non-admins to list, load, and save MC worlds; deletion remains administrator-only. |
+| `mc_preset_public` | `0` | Allow non-admins to list, load, save, and place building presets. |
+| `mc_preset_max_blocks` | `100000` | Maximum non-air blocks saved/placed in one building preset; 0 unlimited. |
 
-## 服务器：同步、存储和大世界
+## Server: synchronization, storage, and large worlds
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_binary_chunk_patch` | `0` | 实验性区块传输协议。启用后，以 palette + packed 32-bit words 的 Binary Section 发送区块，不再为地形生成 JSON 或 `"localIndex:paletteId"` 文本；不支持该能力的客户端自动走旧协议。 |
-| `mc_binary_net_profile` | `0` | 收集 Binary Section 服务端编码、LZMA、CRC、切包入队、`net.Send` CPU 与发送队列墙钟时间。使用 `mc_binary_net_report` 查看。 |
-| `mc_sync_messages_per_tick` | `4` | 每 0.05 秒最多向每个玩家发送多少条排队状态消息。 |
-| `mc_sync_reliable_budget` | `3400` | 每 0.05 秒、每个玩家的排队状态字节硬上限；约 68 KB/s，204 KB 在无拥塞时约 3 秒。 |
-| `mc_sync_frame_ms` | `4` | 每 tick 大约花多少毫秒服务器 CPU 时间做完整同步。 |
-| `mc_sync_inflight_limit` | `32768` | 单个客户端允许等待处理确认的最大排队状态字节数。 |
-| `mc_chunk_http_enabled` | `0` | 允许客户端通过 HTTP 拉取 lazy-save 基础 chunk，而不是走 GMod net。 |
-| `mc_chunk_http_base_url` | 空 | HTTP 根地址，指向服务端 `garrysmod/data` 下的 lazy save manifest/part。 |
-| `mc_stream_chunk_span_xy` | `0` | 旧的客户端 chunk 范围同步水平半径；直接全量同步会忽略。 |
-| `mc_stream_chunk_span_z` | `0` | 旧的客户端 chunk 范围同步垂直半径；直接全量同步会忽略。 |
-| `mc_large_world_lazy_load` | `0` | 旧的 v8 lazy chunk loading 开关；默认是服务端直接加载。 |
-| `mc_large_world_chunk_threshold` | `2048` | 导入存档达到多少 chunk 后按大世界/lazy streaming 语义处理。 |
-| `mc_chunk_store_part_cache` | `8` | 内存里最多缓存多少个 v8 lazy-save part 文件。 |
-| `mc_chunk_store_loads_per_tick` | `8` | store tick 每次最多 hydrate 多少个 lazy chunk。 |
-| `mc_chunk_store_frame_ms` | `3` | lazy chunk hydrate 每 tick 的大约毫秒预算。 |
+| `mc_binary_chunk_patch` | `0` | Experimental chunk transport. Sends Binary Sections as palettes and packed 32-bit words instead of generating JSON or "localIndex:paletteId" terrain text; clients without support use the old protocol. |
+| `mc_binary_net_profile` | `0` | Collect Binary Section server encoding, LZMA, CRC, packet splitting/queueing, net.Send CPU time, and send-queue wall time. Read with mc_binary_net_report. |
+| `mc_sync_messages_per_tick` | `4` | Maximum queued state messages sent per player every 0.05 seconds. |
+| `mc_sync_reliable_budget` | `3400` | Hard queued-state byte limit per player per 0.05 seconds; about 68 KB/s, or about 3 seconds for 204 KB without congestion. |
+| `mc_sync_frame_ms` | `4` | Approximate server CPU milliseconds spent on full synchronization per tick. |
+| `mc_sync_inflight_limit` | `32768` | Maximum queued state bytes awaiting processing acknowledgement from one client. |
+| `mc_chunk_http_enabled` | `0` | Allow clients to fetch lazy-save base chunks over HTTP instead of GMod net. |
+| `mc_chunk_http_base_url` | empty | HTTP root pointing to the lazy-save manifest/parts under the server's garrysmod/data. |
+| `mc_stream_chunk_span_xy` | `0` | Legacy horizontal client chunk synchronization radius; ignored by direct full synchronization. |
+| `mc_stream_chunk_span_z` | `0` | Legacy vertical client chunk synchronization radius; ignored by direct full synchronization. |
+| `mc_large_world_lazy_load` | `0` | Legacy v8 lazy chunk loading switch; direct server loading is the default. |
+| `mc_large_world_chunk_threshold` | `2048` | Imported-save chunk threshold for large-world/lazy-streaming handling. |
+| `mc_chunk_store_part_cache` | `8` | Maximum v8 lazy-save part files cached in memory. |
+| `mc_chunk_store_loads_per_tick` | `8` | Maximum lazy chunks hydrated per store tick. |
+| `mc_chunk_store_frame_ms` | `3` | Approximate lazy-chunk hydration budget in milliseconds per tick. |
 
-## 服务器和客户端碰撞
+## Server and client collision
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_server_collision` | `0` | 是否建立服务器权威 MC 碰撞。关闭会立即清除现有 `mc_chunk` / `mc_chunk_phys` 碰撞实体和待重建队列；客户端预测碰撞不受影响。当前默认关闭用于定位卡顿。 |
-| `mc_server_collision_chunk_span` | `0` | 服务器碰撞 AABB 周围额外保活的 chunk 半径。 |
-| `mc_server_collision_aabb_padding` | 约 `36.5` | 玩家/实体 AABB 外扩多少 Source 单位，用于保持 MC chunk 碰撞激活。 |
-| `mc_collision_aim_distance` | 约 `18688` | 以准星方块为中心维护碰撞兴趣的 trace 距离，和建造距离无关。 |
-| `mc_server_collision_aim_radius` | `1` | 每个玩家准星命中的 MC 方块周围多少格保活服务器碰撞。 |
-| `mc_client_collision_aim_radius` | `1` | 客户端预测碰撞使用的准星方块半径。 |
-| `mc_server_collision_hot_span` | `2` | 按实体速度预判时额外保活的服务器碰撞 chunk 半径。 |
-| `mc_server_collision_lookahead_time` | `0.5` | 服务器碰撞兴趣按实体速度向前看的秒数。 |
-| `mc_server_collision_lookahead_max` | `4` | 速度预判最多扩到多少 chunk 半径。 |
-| `mc_client_collision` | `1` | 是否构建客户端预测用方块碰撞；`0` 表示只用服务器碰撞。 |
-| `mc_client_collision_chunk_span` | `1` | 本地玩家周围客户端预测碰撞 AABB 的 chunk 半径；`0` 关闭。 |
-| `mc_client_collision_debug` | `0` | 打印客户端预测碰撞重建诊断。 |
-| `mc_client_collision_cross_chunk` | `0` | 允许客户端预测碰撞兴趣溢出到相邻 chunk。 |
-| `mc_client_collision_default_version` | `0` | 内部迁移标记，用于客户端碰撞默认值升级。 |
+| `mc_server_collision` | `0` | Build server-authoritative MC collision. Disabling immediately clears existing mc_chunk/mc_chunk_phys collision entities and pending rebuilds; client prediction collision is unaffected. Currently disabled by default to diagnose hitches. |
+| `mc_server_collision_chunk_span` | `0` | Extra chunk radius kept active around the server collision AABB. |
+| `mc_server_collision_aabb_padding` | approx. `36.5` | Player/entity AABB padding in Source units used to keep MC chunk collision active. |
+| `mc_collision_aim_distance` | approx. `18688` | Trace distance for maintaining collision interest around the crosshair block; independent of building reach. |
+| `mc_server_collision_aim_radius` | `1` | Block radius around each player's crosshair hit kept active for server collision. |
+| `mc_client_collision_aim_radius` | `1` | Crosshair-block radius used by client prediction collision. |
+| `mc_server_collision_hot_span` | `2` | Extra server collision chunk radius kept active by entity-velocity prediction. |
+| `mc_server_collision_lookahead_time` | `0.5` | Seconds of entity-velocity lookahead for server collision interest. |
+| `mc_server_collision_lookahead_max` | `4` | Maximum chunk radius added by velocity prediction. |
+| `mc_client_collision` | `1` | Build block collision for client prediction; 0 uses server collision only. |
+| `mc_client_collision_chunk_span` | `1` | Client prediction collision AABB chunk radius around the local player; 0 disables it. |
+| `mc_client_collision_debug` | `0` | Print client prediction collision rebuild diagnostics. |
+| `mc_client_collision_cross_chunk` | `0` | Allow client prediction collision interest to extend into adjacent chunks. |
+| `mc_client_collision_default_version` | `0` | Internal marker for migration of client collision defaults. |
 
-## 爆炸、伤害和批量重建
+## Explosions, damage, and bulk rebuilds
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_explosion_mesh_sections_per_frame` | `4` | 爆炸修改方块后，客户端每个间隔重建多少 render section。 |
-| `mc_explosion_mesh_interval` | `0.12` | 爆炸后客户端 mesh 重建批次之间的秒数。 |
-| `mc_bulk_collision_chunks_per_interval` | `1` | 爆炸/预设编辑后，服务器每个间隔重建多少碰撞 chunk。 |
-| `mc_bulk_collision_interval` | `0.12` | 服务器批量碰撞重建间隔秒数。 |
-| `mc_block_damage` | `1` | 是否允许 GMod 伤害破坏 MC 方块。 |
-| `mc_block_health_scale` | `20` | Minecraft hardness 转成方块血量时的倍率。 |
-| `mc_block_damage_decay` | `5` | 部分方块伤害多少秒后遗忘。 |
-| `mc_block_explosion_scale` | `0.04` | GMod 爆炸伤害转 Minecraft 风格爆炸半径的倍率。 |
-| `mc_block_explosion_max_radius` | `8` | Minecraft 风格方块爆炸最大半径。 |
-| `mc_block_explosion_max_blocks` | `4096` | 单次 GMod 爆炸最多破坏多少 MC 方块；`0` 表示不限。 |
-| `mc_block_explosion_fx_limit` | `16` | 单次爆炸最多广播多少个方块破坏粒子/音效；`0` 表示不广播。 |
+| `mc_explosion_mesh_sections_per_frame` | `4` | Client render sections rebuilt per interval after explosion block edits. |
+| `mc_explosion_mesh_interval` | `0.12` | Seconds between client mesh rebuild batches after explosions. |
+| `mc_bulk_collision_chunks_per_interval` | `1` | Server collision chunks rebuilt per interval after explosion/preset edits. |
+| `mc_bulk_collision_interval` | `0.12` | Server bulk collision rebuild interval in seconds. |
+| `mc_block_damage` | `1` | Allow GMod damage to break MC blocks. |
+| `mc_block_health_scale` | `20` | Multiplier converting Minecraft hardness to block health. |
+| `mc_block_damage_decay` | `5` | Seconds until partial block damage is forgotten. |
+| `mc_block_explosion_scale` | `0.04` | Multiplier converting GMod explosion damage to a Minecraft-style explosion radius. |
+| `mc_block_explosion_max_radius` | `8` | Maximum Minecraft-style block explosion radius. |
+| `mc_block_explosion_max_blocks` | `4096` | Maximum MC blocks broken by one GMod explosion; 0 unlimited. |
+| `mc_block_explosion_fx_limit` | `16` | Maximum block-break particle/sound events broadcast per explosion; 0 disables broadcasting. |
 
-## 客户端基础光照
+## Client basic lighting
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_light_enabled` | `1` | 是否把 Minecraft 风格顶点光照应用到 MC chunk mesh。 |
-| `mc_light_ambient_min` | `0` | CPU/vertex-color 路径的最低亮度，不控制 GPU global lightmap。 |
-| `mc_light_profile` | `shader` | mesh 光照管线 profile：`fast`、`vanilla`、`best` 是 CPU/vertex-color 路径；`shader` 是 GPU chunk shader 路径（默认）。 |
-| `mc_light_style` | `fancy` | GPU 像素光照观感：`fancy`、`plain`、`fast`、`vanilla`。旧归档值 `shader` / `best` / 数字会归一为 `fancy`。 |
-| `mc_light_perf_debug` | `0` | 显示并收集详细光照性能诊断。 |
-| `mc_light_perf_print_break` | `0` | 破坏方块后打印光照性能诊断。 |
-| `mc_light_perf_print_each` | `0` | 每次光照计算打印一行 timing 诊断。 |
-| `mc_light_sky_flood` | `1` | 体素天空光泛洪填充：露天 15，横向每格 -1 进入室内，全封闭 0（`0` = 天空光均匀全亮）。 |
-| `mc_light_sky_flood_per_frame` | `4` | 每帧从摊销队列里重算多少个 chunk 的天空光泛洪。 |
+| `mc_light_enabled` | `1` | Apply Minecraft-style vertex lighting to MC chunk meshes. |
+| `mc_light_ambient_min` | `0` | Minimum brightness of the CPU/vertex-color path; does not control the GPU global lightmap. |
+| `mc_light_profile` | `shader` | Mesh lighting profile: fast, vanilla, and best use CPU/vertex colors; shader uses the GPU chunk shader (default). |
+| `mc_light_style` | `fancy` | GPU pixel-lighting style: fancy, plain, fast, vanilla. Old archived shader/best/numeric values normalize to fancy. |
+| `mc_light_perf_debug` | `0` | Display and collect detailed lighting performance diagnostics. |
+| `mc_light_perf_print_break` | `0` | Print lighting performance diagnostics after breaking a block. |
+| `mc_light_perf_print_each` | `0` | Print one timing diagnostic line per lighting calculation. |
+| `mc_light_sky_flood` | `1` | Voxel skylight flood fill: 15 outdoors, attenuating by 1 per horizontal block indoors, 0 fully enclosed; 0 makes skylight uniformly full. |
+| `mc_light_sky_flood_per_frame` | `4` | Chunks whose skylight flood fill is recalculated from the amortized queue per frame. |
 
-## 客户端渲染和 mesh
+## Client rendering and meshes
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_mesh_render` | `1` | 是否绘制 MC chunk IMesh；关闭只隐藏 mesh，不影响碰撞。 |
-| `mc_mesh_cull_mode` | `ccw` | MC chunk mesh 的剔除方向：`ccw` 或 `cw`。 |
-| `mc_mesh_frustum_cull` | `1` | 跳过视锥外的 MC chunk mesh 绘制。 |
-| `mc_mesh_draw_distance` | `0` | MC chunk mesh 最大绘制距离(Source 单位);`0` = 不限。 |
-| `mc_item_drop_draw_distance` | `96` | 掉落物最大绘制距离，单位为 Minecraft 方块；`0` 取消距离裁剪。16 格外最多画 2 个堆叠副本，32 格外最多画 1 个；物品数量和拾取不受影响。 |
-| `mc_mesh_depth_prepass` | `0` | GPU 着色前额外画一遍 CPU 材质 depth-only prepass;几何成本翻倍,通常保持关闭。 |
-| `mc_mesh_emit_probe` | `0` | 打印详细 mesh emit timings，用于诊断完整几何重建。 |
-| `mc_mesh_begin_upload` | `1` | 用 `mesh.Begin` 上传 IMesh 顶点，而不是 `IMesh:BuildFromTriangles`。 |
-| `mc_mesh_debug_full_cube_only` | `0` | 调试 mesh emission 时只渲染完整立方体方块。 |
-| `mc_mesh_geometry_cache_sections` | `384` | 保留 Lua 顶点/光照数据的 render section 数量；调低省内存。 |
-| `mc_mesh_block_emit_cache_sections` | `1536` | 保留按方块 emit 顶点/光照缓存的 section 数；调低省内存但增加重建工作。 |
-| `mc_mesh_connection_visible_template` | `1` | 对 fence/pane/wall/pipe 等连接形状使用可见几何模板缓存。 |
+| `mc_mesh_render` | `1` | Draw MC chunk IMesh objects; disabling hides meshes without affecting collision. |
+| `mc_mesh_cull_mode` | `ccw` | MC chunk mesh culling direction: ccw or cw. |
+| `mc_mesh_frustum_cull` | `1` | Skip drawing MC chunk meshes outside the view frustum. |
+| `mc_mesh_draw_distance` | `0` | Maximum MC chunk mesh draw distance in Source units; 0 unlimited. |
+| `mc_item_drop_draw_distance` | `96` | Maximum drop draw distance in Minecraft blocks; 0 disables distance culling. At most 2 stack copies beyond 16 blocks and 1 beyond 32; item counts and pickup are unaffected. |
+| `mc_mesh_depth_prepass` | `0` | Extra CPU-material depth-only prepass before GPU shading; doubles geometry cost and should usually remain off. |
+| `mc_mesh_emit_probe` | `0` | Print detailed mesh emission timings to diagnose full geometry rebuilds. |
+| `mc_mesh_begin_upload` | `1` | Upload IMesh vertices with mesh.Begin instead of IMesh:BuildFromTriangles. |
+| `mc_mesh_debug_full_cube_only` | `0` | Render only full-cube blocks when debugging mesh emission. |
+| `mc_mesh_geometry_cache_sections` | `384` | Render sections retaining Lua vertex/lighting data; reducing this saves memory. |
+| `mc_mesh_block_emit_cache_sections` | `1536` | Sections retaining per-block emitted vertex/lighting caches; reducing this saves memory but increases rebuild work. |
+| `mc_mesh_connection_visible_template` | `1` | Cache visible geometry templates for connected shapes such as fences, panes, walls, and pipes. |
 
-## GPU shader、GPU light texture 和 global lightmap
+## GPU shaders, GPU light textures, and the global lightmap
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_light_shader` | `1` | 使用自定义 GPU chunk shader；需要已编译 VCS 文件。 |
-| `mc_light_texture` | `1` | GPU shader 从 chunk light texture 采样光照，而不是把光照烘进顶点色。 |
-| `mc_light_style` | `fancy` | GPU 光照观感选择：`fancy` = PCF 阴影+冷暖调色；`plain` = 平滑光照无调色；`fast` = 低采样旧观感；`vanilla` = 原版 Minecraft lightmap 合成。 |
-| `mc_light_bloom` | `1` | `fancy` GPU 光照的屏幕 bloom；shader 负责生成火把/阳光高亮种子，此项负责实际模糊扩散。 |
-| `mc_light_bloom_strength` | `0.8` | bloom 强度；夜晚会自动小幅增强。 |
-| `mc_light_bloom_threshold` | `0.7` | bloom 亮度阈值；越高越只保留最亮的火把核心和日光高光。 |
-| `mc_light_bloom_radius` | `6` | bloom 屏幕模糊半径，范围在运行时限制为 `1..16`。 |
-| `mc_light_brightness` | `1.5` | GPU light texture 的 block/sky light 亮度倍率(>1 时火把高等级饱和截顶;想不截顶地增强火把改用 gamma)。 |
-| `mc_light_gamma` | `1` | GPU light texture 的衰减曲线；`>1` 提亮中间亮度，`<1` 压暗。 |
-| `mc_light_sun_brightness` | `1` | GPU 路径 sun/sky light 亮度倍率。 |
-| `mc_light_refresh_per_frame` | `2` | 昼夜 sky level 跳变时，每帧刷新多少个 chunk light texture。 |
-| `mc_lightmap` | `1` | 启用程序生成的 16x16 global lightmap；提供暖火把和彩色昼夜天光。 |
-| `mc_lightmap_torch_warmth` | `0.7` | global lightmap 里 block light/火把的暖色程度。 |
-| `mc_lightmap_ambient` | `0.04` | GPU global lightmap 的最低可见亮度；设 `0` 可接近全黑。 |
-| `mc_lightmap_sunset` | `0.5` | sunrise/sunset 天光轴橙色渐变强度；`0` 关闭。 |
-| `mc_lightmap_night_gamma` | `0.6` | 昼夜天光亮度的感知曲线(`1` = 线性;更低 = 夜晚更亮更蓝、黄昏过渡更缓)。 |
-| `mc_lightmap_sky_curve` | `3` | 天空环境光衰减形状 `1-(1-level)^curve`：越高，屋檐/树冠下等"有遮挡但开阔"的区域越亮，只有真正封闭的空间才落到环境底光（`1` = 线性）。 |
-| `mc_lightmap_sky_min` | `0.1` | 天空环境光在 sky level 0 处保留的比例（室内/大建筑底下的环境底光；直射阳光独立于此，由 shadow map 决定）。 |
-| `mc_lightmap_eye_dark` | `1` | 相机所在格无天空光时的环境光乘数（eyeBrightness 洞穴变暗）；`1` = 关闭——站在大建筑底下也会触发它，所以默认关。 |
-| `mc_lightmap_vanilla_gamma` | `0.5` | `mc_light_style vanilla` 使用的原版亮度选项 options.gamma：`0` = 昏暗(Moody)，`0.5` = 原版默认，`1` = 明亮。 |
-| `mc_lightmap_vanilla_flicker` | `1` | `mc_light_style vanilla` 使用的原版每 tick 火把闪烁；`0` = 稳定方块光。 |
+| `mc_light_shader` | `1` | Use the custom GPU chunk shader; requires compiled VCS files. |
+| `mc_light_texture` | `1` | Sample lighting from chunk light textures in the GPU shader instead of baking it into vertex colors. |
+| `mc_light_style` | `fancy` | GPU lighting style: fancy = PCF shadows and warm/cool grading; plain = smooth lighting without grading; fast = legacy low-sample appearance; vanilla = original Minecraft lightmap composition. |
+| `mc_light_bloom` | `1` | Screen bloom for fancy GPU lighting; the shader creates torch/sun highlight seeds and this option performs their blur/spread. |
+| `mc_light_bloom_strength` | `0.8` | Bloom strength; automatically increases slightly at night. |
+| `mc_light_bloom_threshold` | `0.7` | Bloom luminance threshold; higher values retain only the brightest torch cores and sunlight highlights. |
+| `mc_light_bloom_radius` | `6` | Screen-space bloom blur radius, clamped at runtime to 1..16. |
+| `mc_light_brightness` | `1.5` | Block/sky brightness multiplier for GPU light textures; values above 1 clip high torch levels. Use gamma to brighten torches without clipping. |
+| `mc_light_gamma` | `1` | GPU light texture attenuation curve; values above 1 brighten midtones, below 1 darken them. |
+| `mc_light_sun_brightness` | `1` | Sun/sky brightness multiplier for the GPU path. |
+| `mc_light_refresh_per_frame` | `2` | Chunk light textures refreshed per frame when the day/night sky level changes. |
+| `mc_lightmap` | `1` | Enable the procedural 16x16 global lightmap for warm torchlight and colored day/night skylight. |
+| `mc_lightmap_torch_warmth` | `0.7` | Warmth of block/torch light in the global lightmap. |
+| `mc_lightmap_ambient` | `0.04` | Minimum visible brightness of the GPU global lightmap; 0 approaches complete darkness. |
+| `mc_lightmap_sunset` | `0.5` | Orange gradient strength along the sunrise/sunset skylight axis; 0 disables it. |
+| `mc_lightmap_night_gamma` | `0.6` | Perceptual curve for day/night skylight brightness; 1 linear, lower values make nights brighter/bluer and dusk transitions gentler. |
+| `mc_lightmap_sky_curve` | `3` | Skylight ambient attenuation shape, 1-(1-level)^curve. Higher values brighten open but shaded areas under eaves/canopies, leaving only truly enclosed spaces at the ambient floor; 1 linear. |
+| `mc_lightmap_sky_min` | `0.1` | Fraction of ambient skylight retained at sky level 0 (ambient floor indoors/under large buildings); direct sunlight is controlled separately by the shadow map. |
+| `mc_lightmap_eye_dark` | `1` | Ambient multiplier when the camera cell has no skylight (eyeBrightness cave darkening); 1 disables it. Disabled by default because standing under large buildings also triggers it. |
+| `mc_lightmap_vanilla_gamma` | `0.5` | Vanilla options.gamma brightness used by mc_light_style vanilla: 0 Moody, 0.5 vanilla default, 1 Bright. |
+| `mc_lightmap_vanilla_flicker` | `1` | Vanilla per-tick torch flicker for mc_light_style vanilla; 0 gives stable block light. |
 
-## 昼夜循环
+## Day/night cycle
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_daycycle` | `1` | 服务器端 MC 昼夜循环开关，默认启用。 |
-| `mc_daycycle_paused` | `0` | 暂停当前世界时间；解除暂停后从冻结时间继续。 |
-| `mc_daycycle_length` | `1200` | 一个完整 MC 日的现实秒数；`1200` 等于原版 20 分钟。 |
-| `mc_daycycle_sun_tilt` | `0.2` | shadow map 使用的太阳轨迹侧向倾斜，避免纯轴向阴影。 |
-| `mc_daycycle_moon_shadow` | `0.3` | 夜晚月光阴影强度相对太阳阴影的倍率。 |
-| `mc_daycycle_moon_light` | `2` | 深夜 moonlight sky level，范围 `0..15`；越低夜晚越暗。 |
-| `mc_daycycle_night_tint` | `0.85` | 夜晚天光向蓝色月光偏移的强度；`0` 表示中性不染蓝。 |
+| `mc_daycycle` | `1` | Server MC day/night cycle; enabled by default. |
+| `mc_daycycle_paused` | `0` | Pause world time; unpausing resumes from the frozen time. |
+| `mc_daycycle_length` | `1200` | Real seconds per full MC day; 1200 equals vanilla's 20 minutes. |
+| `mc_daycycle_sun_tilt` | `0.2` | Lateral sun-path tilt used by the shadow map to avoid purely axial shadows. |
+| `mc_daycycle_moon_shadow` | `0.3` | Night moon-shadow strength relative to sun shadows. |
+| `mc_daycycle_moon_light` | `2` | Deep-night moonlight sky level, 0..15; lower values darken the night. |
+| `mc_daycycle_night_tint` | `0.85` | Strength of the blue moonlight tint in night skylight; 0 neutral. |
 
 ## GPU shadow map
 
-阴影处的黑暗主要靠这一组。建议组合：`mc_light_shader 1`、`mc_light_texture 1`、`mc_light_style fancy`、`mc_shadow 1`，再调 `mc_shadow_strength` 和 `mc_lightmap_ambient`。
+These settings primarily control darkness in shadows. Start with `mc_light_shader 1`, `mc_light_texture 1`, `mc_light_style fancy`, and `mc_shadow 1`, then adjust `mc_shadow_strength` and `mc_lightmap_ambient`.
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_shadow` | `1` | 让 GPU light texture chunk shader 接收 MC shadow map。 |
-| `mc_shadow_strength` | `0.75` | shadow map 对最终亮度的压暗强度。 |
-| `mc_shadow_bias` | `0.0005` | shadow map 深度/边缘采样 bias，用于减轻 acne 和漏光。 |
-| `mc_shadow_softness` | `0.5` | 16 点 Vogel PCF 半径，单位是 shadow-map texel；不会再联动 normal bias。 |
-| `mc_shadow_size` | `2048` | MC-owned shadow map 分辨率,512-4096。map(畸变)模式 RT 为 size × size;csm 模式为 size × 3·size 的纵向级联 atlas(4096 约占 240MB 显存,老显卡可能建不出 RT 导致阴影关闭)。 |
-| `mc_shadow_distance` | `4096` | 阴影总覆盖半径。map(畸变)模式下纹素密度从相机处(约 6.7 倍)随距离连续衰减,近处始终清晰;csm 模式下近/中级联半径为 distance/ratio² 和 distance/ratio。 |
-| `mc_shadow_cascade_ratio` | `3` | 仅 csm 模式:级联半径比,1.5~8。 |
-| `mc_shadow_caster_distance` | `4608` | 距相机多远以内的 MC chunk 会绘入 shadow map。 |
-| `mc_shadow_update_interval` | `0` | shadow map 最小重绘间隔秒数。`0` = 不限速,但现在深度 pass 只在太阳方向、纹素对齐窗口、chunk 几何或覆盖半径变化时才真正重绘(静止场景零成本)。 |
-| `mc_shadow_sun_step` | `1` | 昼夜循环下 shadow map 太阳角的量化步进(度)。连续移动的太阳会让光空间纹素网格每帧旋转,阴影边缘随 `mc_shadow_distance` 增大而明显爬动/抖动;量化后步进之间网格完全静止(深度 pass 也命中签名跳过)。`0` = 连续。阴影强度渐变仍是连续的。 |
-| `mc_shadow_tint` | `0.6` | fancy shader 中阴影向冷色天空 tint 偏移的强度。 |
-| `mc_shadow_edge_fade` | `0.1` | fancy shader 中阴影覆盖边缘的 fade 宽度。 |
-| `mc_shadow_face_shade` | `0.65` | fancy shader 中背离太阳的面按阴影压暗的强度。 |
-| `mc_shadow_warmth` | `0.35` | fancy shader 中日照面和火把区域的暖色强度。 |
+| `mc_shadow` | `1` | Make the GPU light-texture chunk shader receive the MC shadow map. |
+| `mc_shadow_strength` | `0.75` | Shadow-map darkening strength on final brightness. |
+| `mc_shadow_bias` | `0.0005` | Shadow-map depth/edge sampling bias to reduce acne and light leaks. |
+| `mc_shadow_softness` | `0.5` | 16-tap Vogel PCF radius in shadow-map texels; no longer coupled to normal bias. |
+| `mc_shadow_size` | `2048` | MC-owned shadow-map resolution, 512–4096. map mode uses a size × size RT; csm uses a vertical size × 3·size cascade atlas. At 4096 it uses about 240 MB VRAM; older GPUs may fail RT creation and disable shadows. |
+| `mc_shadow_distance` | `4096` | Total shadow coverage radius. In distorted map mode, texel density decreases continuously from about 6.7× at the camera, keeping nearby shadows sharp. In csm mode, near/middle cascade radii are distance/ratio² and distance/ratio. |
+| `mc_shadow_cascade_ratio` | `3` | csm only: cascade radius ratio, 1.5–8. |
+| `mc_shadow_caster_distance` | `4608` | Maximum camera distance of MC chunks drawn into the shadow map. |
+| `mc_shadow_update_interval` | `0` | Minimum shadow-map redraw interval in seconds. 0 imposes no rate limit, but the depth pass redraws only when sun direction, texel-aligned window, chunk geometry, or coverage radius changes; static scenes incur no redraw cost. |
+| `mc_shadow_sun_step` | `1` | Day/night shadow-map sun-angle quantization step, degrees. Continuous sun motion rotates the light-space texel grid each frame, causing more edge crawling/jitter at larger mc_shadow_distance. Quantization keeps the grid stationary between steps and skips matching depth-pass signatures. 0 continuous; shadow-strength transitions remain continuous. |
+| `mc_shadow_tint` | `0.6` | Cool skylight tint strength in fancy shader shadows. |
+| `mc_shadow_edge_fade` | `0.1` | Fade width at the edge of fancy shader shadow coverage. |
+| `mc_shadow_face_shade` | `0.65` | Shadow darkening strength on faces pointing away from the sun in the fancy shader. |
+| `mc_shadow_warmth` | `0.35` | Warmth of sunlit faces and torch-lit areas in the fancy shader. |
 
-## 高度场光影模式（height shadow mode）
+## Heightfield shadow mode
 
-与 shadow map 二选一的另一套太阳阴影：`mc_shadow_mode height` 切换（`map` 切回，需要 `mc_shadow 1`）。
-维护一张俯视高度图，只在方块变化或玩家走远时重画；chunk shader 沿太阳方向对它 raymarch，
-得到近硬远软的距离衰减软阴影。太阳/相机移动零重绘成本，昼夜循环下远比 `map` 模式便宜。
-强度与调色复用 `mc_shadow_strength` 和 fancy 的 tint/face_shade/warmth/edge_fade；
-`bias/softness/size/distance/caster_distance/update_interval` 等 shadow map 专属项在此模式下无效。
+An alternative sun-shadow technique: select `mc_shadow_mode height`, or switch back with `map`; requires `mc_shadow 1`.
+It maintains a top-down heightmap, redrawing only when blocks change or the player moves far enough. The chunk shader raymarches it along the sun direction,
+producing distance-dependent soft shadows that are sharp nearby and soft farther away. Sun/camera motion adds no redraw cost, making this much cheaper than map mode during the day/night cycle.
+Strength and grading reuse `mc_shadow_strength` and fancy tint/face_shade/warmth/edge_fade.
+Shadow-map-only settings such as `bias/softness/size/distance/caster_distance/update_interval` have no effect in this mode.
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_shadow_mode` | `map` | 太阳阴影技术：`map` = Photon 式畸变 shadow map（单图,clip 空间径向拉伸,近处纹素密度约 6.7 倍且随距离连续衰减,无级联接缝跳变），`csm` = 3 级联纵向 atlas（可纹素吸附,太阳步进下完全静止,但级联边界随相机移动会有质量跳变），`height` = 缓存俯视高度场 raymarch。 |
-| `mc_shadow_hf_size` | `1024` | 高度图分辨率。 |
-| `mc_shadow_hf_range` | `4096` | 高度图覆盖的世界半径（以玩家为中心）。 |
-| `mc_shadow_hf_max_dist` | `2400` | 阴影投射的最大世界距离（raymarch 射程）。 |
-| `mc_shadow_hf_softness` | `0.05` | 半影正切：阴影随遮挡距离变软的速度（0.02 锐利，0.12 很软）。 |
-| `mc_shadow_hf_update_interval` | `0.1` | 几何变化/窗口重定位后高度图的最小重绘间隔秒数。 |
+| `mc_shadow_mode` | `map` | Sun shadow technique: map = Photon-style distorted single shadow map with radial clip-space stretching, about 6.7× nearby texel density decreasing continuously with distance, and no cascade seams; csm = 3-cascade vertical atlas with texel snapping, stationary between sun steps but quality transitions at cascade boundaries as the camera moves; height = cached top-down heightfield raymarching. |
+| `mc_shadow_hf_size` | `1024` | Heightmap resolution. |
+| `mc_shadow_hf_range` | `4096` | Heightmap world coverage radius, centered on the player. |
+| `mc_shadow_hf_max_dist` | `2400` | Maximum world-space shadow casting distance (raymarch range). |
+| `mc_shadow_hf_softness` | `0.05` | Penumbra tangent: rate at which shadows soften with occluder distance; 0.02 sharp, 0.12 very soft. |
+| `mc_shadow_hf_update_interval` | `0.1` | Minimum heightmap redraw interval in seconds after geometry changes/window relocation. |
 
-## Source engine 光照桥
+## Source engine lighting bridge
 
-这一组把 Source 静态光照采样混入 MC mesh 顶点色，属于可选桥接，不是 GPU global lightmap。
+This optional bridge mixes Source static lighting into MC mesh vertex colors; it is separate from the GPU global lightmap.
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_mesh_source_lighting` | `0` | 将 Source engine 静态光照混入 MC mesh 顶点色：`0` 关，`1` ambient，`2` normal，`3` max。 |
-| `mc_mesh_source_lighting_strength` | `0.55` | Source 光照调制 MC 顶点色的强度。 |
-| `mc_mesh_source_lighting_min` | `0.35` | Source 光照调制时的最低倍率。 |
-| `mc_mesh_source_lighting_scale` | `1.0` | Source 光照采样值在混入前的倍率。 |
+| `mc_mesh_source_lighting` | `0` | Mix Source static lighting into MC mesh vertex colors: 0 off, 1 ambient, 2 normal, 3 max. |
+| `mc_mesh_source_lighting_strength` | `0.55` | Strength of Source lighting modulation on MC vertex colors. |
+| `mc_mesh_source_lighting_min` | `0.35` | Minimum multiplier during Source lighting modulation. |
+| `mc_mesh_source_lighting_scale` | `1.0` | Multiplier on Source lighting samples before mixing. |
 
-## 调试
+## Debugging
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_server_collision_debug` | `0` | 绘制服务器权威 MC 碰撞兴趣 bounds。 |
-| `mc_client_collision_area_debug` | `0` | 绘制客户端预测碰撞兴趣区域。 |
-| `mc_client_collision_aabb_debug` | `0` | 绘制客户端预测碰撞 AABB boxes。 |
-| `mc_client_collision_aabb_debug_limit` | `2048` | 最多绘制多少个客户端预测碰撞 AABB box。 |
+| `mc_server_collision_debug` | `0` | Draw server-authoritative MC collision interest bounds. |
+| `mc_client_collision_area_debug` | `0` | Draw the client prediction collision interest area. |
+| `mc_client_collision_aabb_debug` | `0` | Draw client prediction collision AABB boxes. |
+| `mc_client_collision_aabb_debug_limit` | `2048` | Maximum client prediction collision AABB boxes drawn. |
 
-## 创造模式手持方块显示
+## Creative-mode held-block display
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_creative_held_model` | `1` | 是否绘制创造模式手持方块模型。 |
-| `mc_creative_held_anim` | `1` | 是否播放创造模式手持方块挥动动画。 |
-| `mc_creative_held_fp_forward` | `11.5` | 第一人称手持方块前后偏移。 |
-| `mc_creative_held_fp_right` | `12` | 第一人称手持方块左右偏移。 |
-| `mc_creative_held_fp_up` | `-8.3` | 第一人称手持方块上下偏移。 |
-| `mc_creative_held_fp_scale` | `6.4` | 第一人称手持方块缩放。 |
-| `mc_creative_held_fp_yaw` | `45` | 第一人称手持方块 yaw。 |
-| `mc_creative_held_fp_pitch` | `0` | 第一人称手持方块 pitch。 |
-| `mc_creative_held_fp_roll` | `0` | 第一人称手持方块 roll。 |
-| `mc_creative_held_tp_forward` | `2.5` | 第三人称手持方块前后偏移。 |
-| `mc_creative_held_tp_right` | `2.2` | 第三人称手持方块左右偏移。 |
-| `mc_creative_held_tp_up` | `-1.8` | 第三人称手持方块上下偏移。 |
-| `mc_creative_held_tp_scale` | `6` | 第三人称手持方块缩放。 |
-| `mc_creative_held_tp_yaw` | `45` | 第三人称手持方块 yaw。 |
-| `mc_creative_held_tp_pitch` | `75` | 第三人称手持方块 pitch。 |
-| `mc_creative_held_tp_roll` | `0` | 第三人称手持方块 roll。 |
+| `mc_creative_held_model` | `1` | Draw the creative-mode held-block model. |
+| `mc_creative_held_anim` | `1` | Play the creative-mode held-block swing animation. |
+| `mc_creative_held_fp_forward` | `11.5` | First-person held-block forward/back offset. |
+| `mc_creative_held_fp_right` | `12` | First-person held-block lateral offset. |
+| `mc_creative_held_fp_up` | `-8.3` | First-person held-block vertical offset. |
+| `mc_creative_held_fp_scale` | `6.4` | First-person held-block scale. |
+| `mc_creative_held_fp_yaw` | `45` | First-person held-block yaw. |
+| `mc_creative_held_fp_pitch` | `0` | First-person held-block pitch. |
+| `mc_creative_held_fp_roll` | `0` | First-person held-block roll. |
+| `mc_creative_held_tp_forward` | `2.5` | Third-person held-block forward/back offset. |
+| `mc_creative_held_tp_right` | `2.2` | Third-person held-block lateral offset. |
+| `mc_creative_held_tp_up` | `-1.8` | Third-person held-block vertical offset. |
+| `mc_creative_held_tp_scale` | `6` | Third-person held-block scale. |
+| `mc_creative_held_tp_yaw` | `45` | Third-person held-block yaw. |
+| `mc_creative_held_tp_pitch` | `75` | Third-person held-block pitch. |
+| `mc_creative_held_tp_roll` | `0` | Third-person held-block roll. |
 
 ## UI
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_language` | `auto` | 默认跟随 `gmod_language`，无法识别或不支持时使用英文；可手动选 `zh_cn` 中文或 `en_us` 英文。 |
-| `mc_inventory_hud_scale` | `0` | 热栏、生命、饥饿、经验和状态效果 HUD 的整数缩放；`0` 按原版 320×240 最小逻辑尺寸自动选择，手动范围 `1..32`。 |
-| `mc_inventory_hud_offset_x` | `0` | 整组生存 HUD 的水平偏移，单位为实际屏幕像素；正数向右。 |
-| `mc_inventory_hud_offset_y` | `0` | 整组生存 HUD 的垂直偏移，单位为实际屏幕像素；正数向下。 |
-| `mc_inventory_ui_scale` | `0` | 物品栏、容器、配方书、铁砧和附魔台的整数缩放；`0` 按原版 320×240 最小逻辑尺寸自动选择，手动范围 `1..32`。 |
-| `mc_inventory_ui_offset_x` | `0` | 物品栏/容器界面的水平偏移，单位为实际屏幕像素；正数向右。 |
-| `mc_inventory_ui_offset_y` | `0` | 物品栏/容器界面的垂直偏移，单位为实际屏幕像素；正数向下。 |
+| `mc_language` | `auto` | Follow gmod_language by default, falling back to English if unrecognized/unsupported; manually select zh_cn Chinese or en_us English. |
+| `mc_inventory_hud_scale` | `0` | Integer scale for hotbar, health, hunger, experience, and status-effect HUD. 0 selects automatically using vanilla's 320×240 minimum logical size; manual range 1..32. |
+| `mc_inventory_hud_offset_x` | `0` | Horizontal offset of the entire survival HUD in physical screen pixels; positive moves right. |
+| `mc_inventory_hud_offset_y` | `0` | Vertical offset of the entire survival HUD in physical screen pixels; positive moves down. |
+| `mc_inventory_ui_scale` | `0` | Integer scale for inventory, containers, recipe book, anvil, and enchanting table. 0 selects automatically using vanilla's 320×240 minimum logical size; manual range 1..32. |
+| `mc_inventory_ui_offset_x` | `0` | Horizontal inventory/container UI offset in physical screen pixels; positive moves right. |
+| `mc_inventory_ui_offset_y` | `0` | Vertical inventory/container UI offset in physical screen pixels; positive moves down. |
 
-例如 1920×1080 下若 HUD 偏大，可先试 `mc_inventory_hud_scale 3`；位置需要微调时再修改两个 offset。输入 `0` 可恢复自动缩放或默认位置。
+At 1920×1080, for example, try `mc_inventory_hud_scale 3` if the HUD is too large, then adjust the two offsets if needed. Enter 0 to restore automatic scaling or the default position.
 
-## Fast 低采样 GPU 光照（旧版观感）
+## Fast low-sample GPU lighting (legacy appearance)
 
-`mc_light_style fast` 切换回最初的低采样 GPU 光照着色器观感：每像素 4 次光照采样 + 1 次图集采样，
-解析式暖/冷调色 + 面向着色，**无阴影采样、无 lightmap 查表**。优先级高于 fancy/height 材质选择。
-昼夜亮度/夜色/暖色由每帧一次的常量传入（复用 daycycle 与 lightmap 的 cvar），无每 chunk 成本。
+`mc_light_style fast` restores the original low-sample GPU lighting shader: 4 lighting samples plus 1 atlas sample per pixel,
+analytical warm/cool grading and face shading, with **no shadow samples or lightmap lookup**. It takes priority over fancy/height material selection.
+Day/night brightness, night tint, and warmth are passed through once-per-frame constants, reusing daycycle/lightmap ConVars with no per-chunk cost.
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_light_style` | `fancy` | 设为 `fast` 使用低采样快速 GPU 光照着色器（旧版观感），并跳过 shadow map / heightfield 消费。 |
-| `mc_light_flush_per_frame` | `8` | PreRender 中每帧最多重烘的 chunk 光照纹理数（绘制路径不再重烘；0 = 不限）。 |
+| `mc_light_style` | `fancy` | Set to fast for the legacy low-sample GPU lighting shader, skipping shadow-map/heightfield consumption. |
+| `mc_light_flush_per_frame` | `8` | Maximum chunk light textures rebaked per frame in PreRender; the draw path no longer rebakes them. 0 unlimited. |
 
-## 原版 Minecraft 光照（vanilla 观感）
+## Original Minecraft lighting (vanilla appearance)
 
-`mc_light_style vanilla` 切换到 1:1 复刻原版 Minecraft 26.2 的光照系统（公式逐行移植自
-反编译源码 `out/` 的 `lightmap.fsh` + `LightmapRenderStateExtractor` + `Timelines`）：
-最终色 = 图集色 x lightmap(方块光, 天光) x 面明暗(顶1.0/底0.5/X面0.6/Y面0.8) x AO，
-**无阴影贴图、无冷暖调色**——昼夜亮度、火把暖色(0xFFD88C)、夜晚蓝天光(0.48,0.48,1 x 0.24)
-全部按原版昼夜时间线烘在 16x16 lightmap 里，每个 MC tick 重绘（含火把闪烁随机游走）。
-开启时自动跳过 shadow map / heightfield 的每帧渲染；切回默认观感用 `mc_light_style fancy`。
-需要 `mc_lightmap 1`（默认开）。
+`mc_light_style vanilla` reproduces Minecraft 26.2 lighting, with formulas ported line by line from
+`lightmap.fsh`, `LightmapRenderStateExtractor`, and `Timelines` in the decompiled `out/` sources:
+final color = atlas color × lightmap(block light, skylight) × face shading (top 1.0 / bottom 0.5 / X faces 0.6 / Y faces 0.8) × AO.
+**No shadow maps or warm/cool grading.** Day/night brightness, warm torchlight (0xFFD88C), and blue night skylight (0.48, 0.48, 1 × 0.24)
+are baked into a 16x16 lightmap using the vanilla day/night timeline, redrawn each MC tick with a torch-flicker random walk.
+Enabling it automatically skips per-frame shadow-map/heightfield rendering. Restore the default style with `mc_light_style fancy`.
+Requires `mc_lightmap 1`, enabled by default.
 
-| ConVar | 默认 | 作用 |
+| ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_light_style` | `fancy` | 设为 `vanilla` 使用原版 Minecraft 光照合成（一次 lightmap 查表，无阴影）。 |
-| `mc_lightmap_vanilla_gamma` | `0.5` | 原版亮度选项 options.gamma：`0` = 昏暗(Moody)，`0.5` = 原版默认，`1` = 明亮。 |
-| `mc_lightmap_vanilla_flicker` | `1` | 原版每 tick 火把闪烁（随机游走 x0.9 衰减）；`0` = 稳定方块光。 |
+| `mc_light_style` | `fancy` | Set to vanilla for original Minecraft lighting composition: one lightmap lookup, no shadows. |
+| `mc_lightmap_vanilla_gamma` | `0.5` | Vanilla options.gamma brightness: 0 Moody, 0.5 vanilla default, 1 Bright. |
+| `mc_lightmap_vanilla_flicker` | `1` | Vanilla per-tick torch flicker with a random walk and ×0.9 decay; 0 gives stable block light. |

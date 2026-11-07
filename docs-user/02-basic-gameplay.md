@@ -1,31 +1,30 @@
-# 开始游玩
+# Getting started
 
-## 物品栏与建造
+English | [简体中文](../docs/zh/user/02-basic-gameplay.md)
 
-安装 `mc_game` 后，在 Sandbox 的 Q 菜单“武器 → Minecraft”中选择
-**MC**（类名 `mc_item_hand`）。
+## Inventory and building
 
-## 切换创造与生存
+With `mc_game` installed, select **MC** (class `mc_item_hand`) in the Sandbox Q menu under **Weapons → Minecraft**.
 
-默认是**创造模式**；服务器可修改默认值，已有玩家沿用已保存的模式。
+## Creative and survival modes
 
-在 `mc_config → 客户端设置 → 界面 → 首页 → Minecraft 游戏模式` 切换，
-或在自己的控制台输入：
+**Creative mode** is the default. The server can change the default; returning players keep their saved mode.
+
+Switch through `mc_config → Client settings → Interface → Home → Minecraft game mode`, or enter in your console:
 
 ```text
 mc_gamemode creative
 mc_gamemode survival
 ```
 
-服务器默认允许玩家切换自己；`mc_allow_gamemode_switch 0` 可禁止普通玩家切换。
-管理员修改其他玩家时使用 `mc_set_gamemode <creative|survival> <玩家名或 SteamID>`。
-服务器控制台执行此命令必须指定玩家。
+By default, players may switch their own mode. `mc_allow_gamemode_switch 0` prevents ordinary players from switching. Administrators can change another player's mode with `mc_set_gamemode <creative|survival> <player-name-or-SteamID>`. The server console must specify a player.
 
-生存默认死亡掉落物品栏与装备；`mc_keep_inventory 1` 可保留。
-物品栏默认会跨重连保存，由 `mc_inventory_persist` 控制。
+Survival deaths drop inventory and equipment by default; `mc_keep_inventory 1` retains them. Inventories persist across reconnects by default, controlled by `mc_inventory_persist`.
 
-## 无法放置或破坏
+## Airboats on water
 
-检查服务器编辑权限、建造距离和世界边界。
-`mc_admin_only 1` 限制管理员编辑；`mc_world_limit` 限制坐标范围，
-`mc_max_blocks` 限制世界方块总数。
+Spawn **Half-Life 2 → Airboat** from the Sandbox Vehicles menu. The normal Source airboat floats and drives on Minecraft water with its usual enter/exit, throttle, reverse and steering controls. Deep water lets the hull float freely; shallow water can ground it on the lake bed. See [airboat water support](../docs/airboat-water.md) for scope and integration details.
+
+## When building or mining fails
+
+Check server editing permissions, reach, and world bounds. `mc_admin_only 1` restricts editing to administrators; `mc_world_limit` limits coordinates; `mc_max_blocks` limits the world's total block count.

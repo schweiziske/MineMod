@@ -115,6 +115,11 @@ return two or more values.
 
 ## Documentation
 
+- Default Markdown documents are written in English. Maintain matching Chinese
+  versions under `docs/zh/`: engineering pages at its root, the project overview
+  in `project.md`, user guides in `user/`, and tool/SDK/addon pages in mirrored paths.
+  Link both languages, update both versions together, and keep relative links
+  valid after moves. Do not introduce `.en.md` or scattered Chinese copies.
 - Keep documentation focused on current behavior, contracts, and usage. Do not
   append editing history, migration progress, or dated validation logs; use Git
   history for change records. Preserve dependency provenance and license notices.
@@ -125,9 +130,9 @@ return two or more values.
   The table decides the category; do not add a category column. Files in a
   subdirectory such as `docs/adr/` are covered by that subdirectory's entry;
   keep its description current.
-- Choose the category by how the document should be read: `契约`, `参考`,
-  `踩坑`, `设计` or `过程`. Research into other projects' code goes under
-  `外部技术调研`. Definitions and the remaining writing rules are in
+- Choose the category by how the document should be read: `Contracts`, `Reference`,
+  `Pitfalls`, `Design` or `Process`. Research into other projects' code goes under
+  `External research`. Definitions and the remaining writing rules are in
   `docs/README.md`.
 - A missing entry is fixed by adding the entry, never by deleting the
   document. Cleanup is manual.

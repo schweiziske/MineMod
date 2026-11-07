@@ -1,84 +1,76 @@
-# Native C++ 代码规范
+# Native C++ standard
 
-用于 `native/` 中项目维护的代码。排版、检查与缩进配置分别为
-[`native/.clang-format`](../native/.clang-format)、[`.clang-tidy`](../native/.clang-tidy)
-及 [`.editorconfig`](../native/.editorconfig)。第三方库和生成文件保持原样；
-`native/sdk/` 保留上游命名、排版、继承与虚函数布局，按 ABI 单独审查。
+English | [简体中文](zh/native-cpp-standard.md)
 
-## 职责与依赖
+Applies to project-owned code in `native/`. Formatting, checks, and indentation are configured in [native/.clang-format](../native/.clang-format), [.clang-tidy](../native/.clang-tidy), and [.editorconfig](../native/.editorconfig). Leave third-party libraries and generated output unchanged. `native/sdk/` preserves upstream naming, formatting, inheritance, and virtual layouts, with separate ABI review.
 
-| 目录 | 职责 |
+## Responsibilities and dependencies
+
+| Directory | Responsibility |
 | --- | --- |
-| `Core/` | 共用基础设施、CPU 并发闸门。 |
-| `World/` | 世界存储、修订、快照、传输解码、光传播。 |
-| `Mesh/` | 配方、区段几何、流体与模型形状、采光及建面任务。 |
-| `Render/Visibility/` | 纯 CPU 可见性数据、图构建、查询及后台 worker。 |
-| `Render/Source/` | 材质系统 ABI、引擎网格、绘制和发布资源。 |
-| `Resources/`、`Resources/Atlas/` | 资源来源、图集、PNG 和像素运算。 |
-| `Resources/Source/` | 引擎纹理、发布屏障与补光事务。 |
-| `Bindings/` | Lua 参数转换、userdata、返回值。 |
-| `Module/` | DLL 入口、初始化、导出注册和关闭。 |
-| `Legacy/` | 仍需保留的旧实现及兼容入口。 |
-| `tests/`、`cmake/` | 测试/探针/基准，以及共用构建列表。 |
-| `include/`、`sdk/`、`build/` | 第三方依赖、维护的 Source 接口、构建产物。 |
+| `Core/` | Shared infrastructure and CPU concurrency gates. |
+| `World/` | World storage, revisions, snapshots, transport decoding, and light propagation. |
+| `Mesh/` | Recipes, section geometry, fluid and model shapes, lighting, and face-building tasks. |
+| `Render/Visibility/` | CPU-only visibility data, graph construction, queries, and background workers. |
+| `Render/Source/` | Material-system ABI, engine meshes, drawing, and resource publication. |
+| `Resources/`, `Resources/Atlas/` | Resource sources, atlases, PNGs, and pixel operations. |
+| `Resources/Source/` | Engine textures, publication barriers, and relighting transactions. |
+| `Bindings/` | Lua argument conversion, userdata, and return values. |
+| `Module/` | DLL entry, initialization, export registration, and shutdown. |
+| `Legacy/` | Required legacy implementations and compatibility entry points. |
+| `tests/`, `cmake/` | Tests, probes, benchmarks, and shared build lists. |
+| `include/`, `sdk/`, `build/` | Third-party dependencies, maintained Source interfaces, and build output. |
 
-纯 CPU 代码不包含 Lua 或 Source SDK；业务模块不反向依赖 Bindings。
-算法计算数据，任务对象管理排队、修订、取消和线程，资源对象管理上传、发布和销毁，
-绑定只转换边界。不要在绑定中另写一套资源事务。
+CPU-only code does not include Lua or Source SDK headers. Business modules do not depend on Bindings. Algorithms compute data; task objects manage queues, revisions, cancellation, and threading; resource objects manage uploads, publication, and destruction; bindings convert at boundaries. Do not implement a second resource transaction system in bindings.
 
-文件与主要类型同名，声明和实现放同目录，如 `SectionGeometry.h/.cpp`。
-按可命名的职责拆分，不按行数机械切文件，不建立只转发参数的多层包装。
-移动文件时同步 include、CMake、测试构建和文档；不能凭 `Legacy` 名称删除兼容实现。
+Name files after their principal type, with declarations and implementations together, such as `SectionGeometry.h/.cpp`. Split by named responsibility, not line count, and avoid layers that only forward arguments. When moving files, update includes, CMake, test builds, and documentation. The name `Legacy` does not authorize deleting compatibility code.
 
-## 命名与排版
+## Naming and formatting
 
-| 对象 | 规则 | 示例 |
+| Element | Rule | Example |
 | --- | --- | --- |
-| 类、结构体、类型别名 | PascalCase | `VisibilityGraph` |
-| 普通函数、方法 | PascalCase、具体动词 | `BuildGraph` |
-| 成员 | `m` + PascalCase | `mChunks` |
-| 静态成员方法、静态可变状态 | `s` + PascalCase | `sCreate` |
-| 类/全局/静态常量 | `c` + PascalCase | `cMaxGridCells` |
-| 输入、输出、读写参数 | `in` / `out` / `io` + PascalCase | `inSnapshot`、`outError` |
-| 局部变量与局部常量 | snake_case | `visible_chunks` |
-| 枚举类型、枚举值 | `E` + PascalCase、PascalCase | `ERejectReason::Frustum` |
+| Classes, structs, type aliases | PascalCase | `VisibilityGraph` |
+| Ordinary functions and methods | PascalCase, concrete verbs | `BuildGraph` |
+| Members | `m` + PascalCase | `mChunks` |
+| Static member methods and mutable static state | `s` + PascalCase | `sCreate` |
+| Class, global, and static constants | `c` + PascalCase | `cMaxGridCells` |
+| Input, output, and read/write parameters | `in` / `out` / `io` + PascalCase | `inSnapshot`, `outError` |
+| Local variables and constants | snake_case | `visible_chunks` |
+| Enum types and values | `E` + PascalCase, PascalCase | `ERejectReason::Frustum` |
 
-SDK override、Lua 导出及 C ABI 符号保持原契约。循环索引可用 `i`、`x`、`y`、`z`。
+SDK overrides, Lua exports, and C ABI symbols retain their contracts. Loop indices may use `i`, `x`, `y`, or `z`.
 
-- Tab 宽度 4；Allman 花括号；删除行尾空白，文件末尾换行。
-- 单语句分支可省花括号，但语句另起一行；校验、锁、Lua 栈、发布、回滚和释放写成可逐步阅读的流程。
-- 指针和引用使用 `Texture *texture`、`const Snapshot &inSnapshot`；不要压缩多个副作用到同一行。
-- 头文件使用 `#pragma once`，直接包含依赖；公开头文件不使用 `using namespace`。
-- 使用 PCH 的 `.cpp` 先包含 PCH，再包含自身头文件；纯 CPU 模块不引入引擎 PCH。
-- include 写明职责路径；`///` 说明公开类型/接口的输入、失败、线程与寿命，实现注释解释必要约束。
+- Tabs of width 4; Allman braces; remove trailing whitespace and end files with a newline.
+- Single-statement branches may omit braces, with the statement on a separate line. Keep validation, locks, Lua-stack handling, publication, rollback, and release readable step by step.
+- Write pointers and references as `Texture *texture` and `const Snapshot &inSnapshot`. Do not compress multiple side effects into one line.
+- Use `#pragma once` and direct dependency includes. No `using namespace` in public headers.
+- A `.cpp` using a PCH includes it first, then its own header. CPU-only modules do not include an engine PCH.
+- Include paths state the responsibility directory. Use `///` to document public inputs, failures, threads, and lifetimes; implementation comments explain necessary constraints.
 
-## 所有权与线程
+## Ownership and threads
 
-每种资源明确一个所有者，优先值成员或唯一所有权。借用指针注明有效期和可空性，
-可失效的长期引用使用代际句柄。Lua registry reference、引擎引用、锁和事务由 RAII 管理；
-初始化失败释放已取得资源，复制与移动语义明确声明。
+Give each resource one explicit owner; prefer value members or unique ownership. Document borrowed-pointer lifetimes and nullability. Use generation handles for long-lived references that may become invalid. Manage Lua registry references, engine references, locks, and transactions through RAII. Release acquired resources on initialization failure and explicitly declare copy and move semantics.
 
-worker 接收不可变快照或独占数据，不访问 Lua 栈、材质、纹理、IMesh 或活动世界可变对象。
-发布前检查世界代际、修订和取消状态。mutex 注明保护成员与加锁顺序，持锁时不调用未知回调或 Lua。
-停止接受任务后唤醒并 join worker，随后退役结果并释放资源；不使用 detached 线程绕过关闭顺序。
+Workers receive immutable snapshots or exclusive data. They do not access the Lua stack, materials, textures, IMesh objects, or mutable live-world objects. Check world generation, revision, and cancellation before publication. Document mutex-protected members and lock order; do not call unknown callbacks or Lua while holding locks.
 
-drain、材质系统锁、Download 和事务恢复由资源发布模块集中负责。
-可能阻塞或发布的绘制接口必须说明前置条件与成本。缓存键覆盖全部输入，所有者负责失效。
+Stop accepting tasks, wake and join workers, then retire results and release resources. Detached threads must not bypass shutdown order.
 
-## 校验、错误与性能
+Resource publication modules centrally own draining, material-system locks, Download, and transaction recovery. Drawing interfaces that can block or publish must document preconditions and cost. Cache keys cover all inputs, and owners handle invalidation.
 
-遵守 [工程规则](../AGENTS.md) 和 [故障上报约定](fault-handling.md)：
+## Validation, errors, and performance
 
-- 在加载、注册、解析、构建或修订变化时验证输入，热循环直接消费验证后的数据。
-- 外部输入错误返回明确失败，内部不变量使用断言；Release 必需的边界检查不能被断言替代。
-- 绑定统一转换错误并恢复栈。C++ 异常不跨 C ABI，Lua 长跳转不能跳过必须执行的析构。
-- 运行时尺寸通过 Lua 坐标 API 提供并传入 C++；不硬编码方块尺寸，不混用世界、引擎、渲染空间。
-- 性能改动减少相同结果的总 CPU、分配、绘制或上传工作；不以分帧或预算收紧冒充优化。
-- 计时写清线程、范围及等待；wall time 不称为 GPU 时间，嵌套阶段不直接相加，探针不放进逐元素循环。
+Follow the [engineering rules](../AGENTS.md) and [fault-handling contract](fault-handling.md):
 
-## 工具
+- Validate at load, registration, parsing, build, or revision changes; hot loops consume validated data.
+- Return explicit failures for invalid external inputs and assert internal invariants. Assertions do not replace required Release boundary checks.
+- Bindings convert errors consistently and restore the stack. C++ exceptions must not cross the C ABI; Lua long jumps must not skip required destructors.
+- Pass runtime dimensions from the Lua coordinate API into C++. Do not hard-code block size or mix world, engine, and render spaces.
+- Performance changes reduce total CPU, allocations, draws, or uploads for the same result. Frame spreading and tighter budgets are not optimizations.
+- Timing identifies thread, scope, and waits. Wall time is not GPU time; nested stages cannot simply be added. Keep probes out of per-element loops.
 
-使用能识别当前配置的 LLVM 22 或更高版本。以下为按用户安排执行的命令示例：
+## Tools
+
+Use LLVM 22 or newer with support for the current configuration. Run the following only as arranged by the user:
 
 ```powershell
 clang-format --style=file:native/.clang-format --dump-config
@@ -87,10 +79,6 @@ clang-format --style=file --dry-run --Werror native/Render/Visibility/Visibility
 clang-tidy -p native/build/x64/auto-release-final native/Render/Visibility/VisibilityQuery.cpp
 ```
 
-`--verify-config` 仅检查配置可解析。tidy 使用与目标架构、分支、配置匹配的编译数据库；
-独立 CPU 测试数据库不能证明 DLL 检查通过。`.clang-format-ignore` 和 tidy header filter
-排除 `include/`、`sdk/`、`build/`，仍不得把第三方源文件当作主翻译单元输入。
+`--verify-config` only checks that the configuration parses. Use a compilation database matching the target architecture, branch, and configuration. A CPU-test-only database does not establish that DLL checks pass. `.clang-format-ignore` and the tidy header filter exclude `include/`, `sdk/`, and `build/`; do not pass third-party sources as primary translation units.
 
-不混入整库格式化，不默认运行 tidy `--fix`，不以全库 `NOLINT` 掩盖问题。
-必要抑制限定具体位置和检查项并解释原因。源码检查、测试、客户端启动及采样仅按用户安排执行。
-构建参数、SDK 与产物位置见 [Native 模块指南](native.md)。
+Do not mix repository-wide formatting with functional changes, run tidy `--fix` by default, or hide issues with global `NOLINT`. Scope necessary suppressions to specific locations and checks, and explain them. Source checks, tests, client launch, and sampling run only as arranged by the user. See the [Native module guide](native.md) for build parameters, SDK details, and output paths.

@@ -1,60 +1,56 @@
-# 存档管理
+# World saves
 
-存档保存整个 MC 方块世界及其方块数据。**读档会替换当前 MC 世界，影响所有玩家**，
-不会切换 GMod 地图，也不保存整套 GMod 场景。
+English | [简体中文](../docs/zh/user/03-saves.md)
 
-## 保存和读取
+A save contains the entire MC block world and its block data. **Loading replaces the current MC world for all players.** It does not change the GMod map or save the entire GMod scene.
 
-控制台输入 `mc_save_manager`，或从设置的“界面 → 首页”打开。
+## Saving and loading
 
-| 操作 | 做法 |
-|---|---|
-| 新建 | 输入“新存档名”，点击“保存当前” |
-| 读取 | 选择存档，点击“读取”并确认 |
-| 覆盖 | 选择存档，点击“覆盖并截图” |
-| 删除 | 选择存档，点击“删除”并确认，仅管理员可用 |
+Enter `mc_save_manager`, or open it from **Interface → Home** in settings.
 
-管理器保存时会拍摄封面。同名保存会覆盖原档。
-地图名显示红色表示存档来自另一张 GMod 地图，读取不会替你换图。
+| Action | Steps |
+| --- | --- |
+| Create | Enter a new save name and click **Save current** |
+| Load | Select a save, click **Load**, and confirm |
+| Overwrite | Select a save and click **Overwrite and screenshot** |
+| Delete | Select a save, click **Delete**, and confirm; administrators only |
 
-默认仅管理员可列出、保存和读取。
-服务器设 `mc_save_public 1` 后普通玩家也可操作，删除仍限管理员。
+The manager captures a cover image when saving. Saving under an existing name overwrites it. A red map name means the save was created on another GMod map; loading does not change maps for you.
 
-## 默认档与命名档
+By default, only administrators may list, save, or load worlds. `mc_save_public 1` grants these actions to ordinary players; deletion remains restricted to administrators.
 
-| 命令 | 作用 |
-|---|---|
-| `mc_save house` | 保存命名档 `house`，同名覆盖 |
-| `mc_save_list` | 列出命名档 |
-| `mc_load_save house` | 读取命名档 `house` |
-| `mc_delete_save house` | 删除命名档 `house` |
-| `mc_save` | 保存当前 GMod 地图的默认档 |
+## Default and named saves
 
-进入地图时自动读取该地图的默认档。命名档需要手动读取。
-即使刚读取了 `house`，不带名称的 `mc_save` 仍写默认档。
+| Command | Purpose |
+| --- | --- |
+| `mc_save house` | Save as `house`, overwriting that name |
+| `mc_save_list` | List named saves |
+| `mc_load_save house` | Load the named save `house` |
+| `mc_delete_save house` | Delete the named save `house` |
+| `mc_save` | Save to the current GMod map's default slot |
 
-**定时自动保存默认关闭。** 服务器设置 `mc_autosave 300` 后，每 300 秒将有改动的世界
-写入默认档；`mc_autosave 0` 关闭。它不会覆盖上一次读取的命名档。
+The map's default save loads automatically on entry. Named saves load manually. Even after loading `house`, `mc_save` without a name still writes the default slot.
 
-## 创意工坊
+**Periodic autosaving is disabled by default.** Server setting `mc_autosave 300` writes a changed world to the default slot every 300 seconds; `mc_autosave 0` disables it. Autosaving does not overwrite the last named save you loaded.
 
-- “读取创意工坊”接受 Workshop ID 或 Steam 创意工坊链接。
-- “发布到创意工坊”先取得选中存档，再截图并打开 GMod 发布窗口；按提示关联 Workshop ID。
-- “创意工坊挂载（只读）”不能覆盖或删除。需要修改时，读取后另存为本地命名档。
+## Workshop
 
-工坊导入与发布另受 `mc_workshop_manage` 控制：
-`0` 超级管理员、`1` 管理员、`2` 所有人，默认 `0`。
+- **Load Workshop** accepts a Workshop ID or Steam Workshop URL.
+- **Publish to Workshop** obtains the selected save, captures a screenshot, and opens GMod's publishing window. Follow its prompts to associate a Workshop ID.
+- **Workshop mount (read-only)** entries cannot be overwritten or deleted. To edit one, load it and save a local named copy.
 
-## 文件与备份
+Workshop importing and publishing also follow `mc_workshop_manage`: `0` superadmins, `1` admins, `2` everyone; default `0`.
 
-以下路径均在**服务器**的 `garrysmod/data/` 下；单人游戏就是本机：
+## Files and backups
 
-| 路径 | 内容 |
-|---|---|
-| `mc/saves/<名称>/` | 当前格式的命名档，含 manifest、元数据和分片 |
-| `mc/saves/<名称>.dat` | 兼容读取的旧格式或导入工具输出 |
-| `mc/<地图名>.dat` | 地图默认档 |
-| `mc/save_covers/` | 存档封面 |
-| `mc/workshop_saves/` | 工坊导入的本地副本 |
+These paths are under the **server's** `garrysmod/data/`; in single-player, that is your computer:
 
-备份时保留完整存档目录及关联分片、元数据和封面，不能只复制 manifest。
+| Path | Contents |
+| --- | --- |
+| `mc/saves/<name>/` | Current named-save format: manifest, metadata, and parts |
+| `mc/saves/<name>.dat` | Compatible legacy format or importer output |
+| `mc/<map-name>.dat` | Map default save |
+| `mc/save_covers/` | Save covers |
+| `mc/workshop_saves/` | Local copies of imported Workshop saves |
+
+Back up the complete save directory and associated parts, metadata, and covers. Copying only the manifest is insufficient.

@@ -1,31 +1,33 @@
-# Minecraft -> Garry's Mod 转换约定
+# Minecraft -> Garry's Mod conversion rules
 
-本仓库把 Minecraft Java 的物品、动画和渲染行为移植到 Garry's Mod。凡是修改模型位置、角度、缩放、动画、第一人称投影或 `PoseStack` 的代码，必须先遵守本文件。
+English | [简体中文](../../docs/zh/addons/mc_item/AGENTS.md)
 
-## 基本事实
+This repository ports Minecraft Java item, animation, and rendering behavior to Garry's Mod. Follow this document before changing model positions, angles, scales, animation, first-person projection, or `PoseStack` code.
 
-- Minecraft Java 的客户端渲染数据来自 OpenGL/JOML/`PoseStack` 约定；Garry's Mod/Source 使用 DX9/Source 约定。两边的坐标系、手性、局部轴、矩阵乘法语义和投影参数不能直接照抄。
-- “OpenGL -> DX9”不是一条可以套在所有数据上的固定 `x/y/z` 交换。必须先说明数据属于 Minecraft 世界空间、相机空间、`ModelPart` 局部空间、item display 空间，还是转换后 MDL 的局部空间。
-- Minecraft 世界空间的竖直轴是 `+Y`；Source 世界空间的竖直轴是 `+Z`。Source 模型局部基是 `+X = Forward`、`+Y = Left`、`+Z = Up`，而 `Angle:Right()` 指向局部 `-Y`。
-- Minecraft 相机空间按 `+X = 右`、`+Y = 上`、`+Z = 朝向观察者` 处理；换到 Source 相机基时使用 `Right / Up / -Forward`。现有唯一入口是 `MCITEM.Render.CameraOffset`。
+## Fundamentals
 
-## 单位与缩放
+- Minecraft Java client rendering data follows OpenGL/JOML/`PoseStack` conventions; Garry's Mod/Source follows DX9/Source conventions. Coordinate systems, handedness, local axes, matrix multiplication semantics, and projection parameters cannot be copied directly.
+- There is no universal fixed `x/y/z` swap for “OpenGL -> DX9”. First identify whether data belongs to Minecraft world space, camera space, `ModelPart` local space, item display space, or the converted MDL's local space.
+- Minecraft world up is `+Y`; Source world up is `+Z`. The Source model-local basis is `+X = Forward`, `+Y = Left`, `+Z = Up`; `Angle:Right()` points along local `-Y`.
+- Treat Minecraft camera space as `+X = right`, `+Y = up`, `+Z = toward the viewer`; use `Right / Up / -Forward` for the Source camera basis. The single existing entry point is `MCITEM.Render.CameraOffset`.
 
-- Minecraft item display 的 translation 使用模型像素，必须先除以 `16` 才是方块单位；使用 `MCITEM.Render.DisplayOffset`。
-- 当前 `mc2source` 物品模型的导出常量是 `$scale 36.5`，即一个模型方块单位对应 `36.5` Source units。它是模型导出比例，不是世界方块尺寸。
-- Minecraft 世界中的一格必须从运行时方块尺寸 API/`MC.BS` 获取。禁止拿 `36.5` 代替世界方块尺寸，也禁止把可变的世界方块尺寸反过来改写模型导出比例。
-- 模型实体又有自己的 render scale。位移与模型缩放必须处在同一套单位中，不能只缩模型而漏缩相机空间位移。
+## Units and scaling
 
-## 变换与投影
+- Minecraft item display translation uses model pixels. Divide by `16` to obtain block units; use `MCITEM.Render.DisplayOffset`.
+- The current `mc2source` item model export constant is `$scale 36.5`: one model block unit equals `36.5` Source units. This is the model export scale, not the world block size.
+- Obtain Minecraft world block size from the runtime block-size API/`MC.BS`. Do not substitute `36.5` for world block size or use variable world block size to overwrite the model export scale.
+- Model entities also have their own render scale. Translation and model scale must use consistent units; scaling the model without scaling camera-space translation is incorrect.
 
-- 必须保留 Java `PoseStack` 的 translate/rotate/scale 调用顺序、右乘语义和 pivot。旋转不可交换；不要把每个 Java Euler 分量独立改符号后再用另一顺序组合。
-- 优先在 Minecraft 空间重建完整矩阵或三个基向量，最后只做一次 Minecraft -> Source 换基。禁止用一串手调 Source Euler 角近似已经可以从源码还原的矩阵。
-- 相机轴映射不能直接用于编译后的模型轴。当前盾牌几何的明确合同是 `ShieldModel (x,y,z) -> runtime MDL local (z,x,y)`，还包含 special renderer 的 `(1,-1,-1)` 和 idle sequence yaw；使用 `MCITEM.Render.ApplyExactShieldTransform`，不要另写一套。
-- Minecraft 传给透视矩阵的 `70` 是垂直 FOV；Source viewmodel FOV 按参考 `4:3` 的水平 FOV 解释。换算公式是 `2*atan(tan(vertical/2)*(4/3))`，`70` 对应约 `86.067`，禁止直接把 `70` 填给 Source 后声称画面等价。
+## Transforms and projection
 
-## 修改要求
+- Preserve Java `PoseStack` translate/rotate/scale call order, right-multiplication semantics, and pivots. Rotations do not commute; do not independently flip Java Euler component signs and then combine them in another order.
+- Reconstruct the complete matrix or three basis vectors in Minecraft space first, then perform one Minecraft -> Source basis conversion. Do not approximate a matrix recoverable from source with manually tuned Source Euler angles.
+- Camera-axis mapping does not apply directly to compiled model axes. The current shield geometry contract is `ShieldModel (x,y,z) -> runtime MDL local (z,x,y)`, including the special renderer's `(1,-1,-1)` and idle-sequence yaw. Use `MCITEM.Render.ApplyExactShieldTransform`.
+- Minecraft's perspective-matrix `70` is vertical FOV; Source viewmodel FOV is horizontal at a reference aspect ratio of `4:3`. Convert with `2*atan(tan(vertical/2)*(4/3))`: `70` becomes approximately `86.067`. Do not pass `70` directly to Source and claim equivalent projection.
 
-- 每个新向量/角度/缩放值旁边必须能判断它的来源空间和单位；来源不清楚时先追 Minecraft 源码与转换器输出。
-- 先复用或扩展 `lua/mcitem/cl_item_render.lua` 的公共转换函数。发现新的轴合同，应集中实现并加回归检查，禁止在某把武器里偷偷写 private 轴修正。
-- 手调锚点只能补偿 Source viewmodel/模型资源本身的已知差异，不能用来掩盖符号、轴、FOV、`1/16` 或方块尺寸换算错误。
-- 校验时至少分别检查静止位姿、发生旋转后的位姿和非零 pivot/translation；只看静止截图无法证明坐标转换正确。
+## Change requirements
+
+- Every new vector/angle/scale value must have an identifiable source space and unit. Trace Minecraft source and converter output when the origin is unclear.
+- Reuse or extend shared conversion functions in `lua/mcitem/cl_item_render.lua` first. Implement new axis contracts centrally and add regression checks; do not introduce private axis corrections in individual weapons.
+- Manually tuned anchors may compensate for known Source viewmodel/model-asset differences. They must not hide sign, axis, FOV, `1/16`, or block-size conversion errors.
+- Verify idle poses, rotated poses, and nonzero pivots/translations separately. An idle screenshot alone cannot establish a correct coordinate conversion.

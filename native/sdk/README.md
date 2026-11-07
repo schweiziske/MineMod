@@ -1,52 +1,42 @@
-# MineMod Source SDK 头文件
+# MineMod Source SDK headers
 
-这里维护 MineMod 实际使用的 Windows Source 引擎接口。目录、类名、继承、
-虚函数和结构体沿用 Source SDK。`IMesh`、`ITexture` 等已核对的共用接口正常调用；
-材质系统在 `Render/Source/MaterialSystem` 边界选择对应的强类型 ABI。
+English | [简体中文](../../docs/zh/native/sdk/README.md)
 
-## 使用
+This directory maintains the Windows Source interfaces used by MineMod. Directory names, class names, inheritance, virtual methods, and structs follow the Source SDK. Verified shared interfaces such as `IMesh` and `ITexture` use ordinary calls. The `Render/Source/MaterialSystem` boundary selects the appropriate strongly typed material-system ABI.
 
-通过 `native/CMakeLists.txt` 的 `source_sdk` target 使用，只搜索本目录的 `sdk/`、
-`sdk/public/` 和 `sdk/public/tier0/`。引擎接口及其依赖的 mathlib、tier0/tier1、
-枚举和工具头文件全部作为普通文件由本仓库维护。
-`sdk/lib/public/tier0.lib` 与 `sdk/lib/public/x64/tier0.lib` 分别是 x86/x64 导入库，
-相应 `.def` 一并保留。LZMA 解码器独立位于 `native/include/lzma/`，不依赖引擎 SDK。
+## Usage
 
-| CMake `GMOD_BRANCH` | 头文件宏 | `IAppSystem` 基类虚函数数 | 接受的实际 ABI |
-|---|---|---:|---|
-| `auto`（默认，仅 x64） | `GMOD_SDK_PUBLIC` + 模块 `MCSWEP_AUTO_BRANCH` | 同时支持 5/9 | public / beta |
+The `source_sdk` target in `native/CMakeLists.txt` searches only this directory's `sdk/`, `sdk/public/`, and `sdk/public/tier0/`. Engine interfaces and their mathlib, tier0/tier1, enum, and utility dependencies are maintained as ordinary repository files.
+
+`sdk/lib/public/tier0.lib` and `sdk/lib/public/x64/tier0.lib` are the x86 and x64 import libraries, with their `.def` files retained. The LZMA decoder in `native/include/lzma/` is independent of the engine SDK.
+
+| CMake `GMOD_BRANCH` | Header macros | `IAppSystem` base virtual methods | Accepted runtime ABI |
+| --- | --- | ---: | --- |
+| `auto` (default, x64 only) | `GMOD_SDK_PUBLIC` + module `MCSWEP_AUTO_BRANCH` | Both 5 and 9 | public / beta |
 | `public` | `GMOD_SDK_PUBLIC` | 5 | public |
 | `x86-64` | `GMOD_SDK_X86_64` | 9 | beta |
 
-public 支持 Windows x86 和 x64；beta 只生成 Windows x64 模块。
-beta 分支名称中的 `x86` 不表示生成 32 位模块。
-`IAppSystemPublic` 声明原版的 5 个方法，`IAppSystemX86_64` 追加 beta 的
-`GetDependencies`、`GetTier`、`Reconnect`、`IsSingleton`。`IAppSystem` 保留编译时
-默认分支的 Source 名称；`IMaterialSystemBase<TAppSystem>` 共享原有方法声明，
-`IMaterialSystemPublic` / `IMaterialSystemX86_64` 使用不同的基类布局，避免同名类型异定义。
-`IMaterialSystem` 仍对应编译时默认分支；所有这些接口仍使用正常 C++ 虚调用。
-DLL 入口在 x64 上先只读检查工厂返回对象的材质系统 ABI，再选择对应实现并注册 restore 回调；
-共用算法和 Lua 导出不分支。`auto` 用于通用 x64 DLL；固定分支产物仍拒绝另一分支。
-`BRANCH` 表示 Steam Beta 分支，不能作为独立安装目录的二进制 ABI 证明：本地 public
-2026.09.17 客户端在 Steam 选择 x86-64 时实测也返回 `x86-64`。x86 固定 public 构建
-仍保留 `BRANCH=unknown` 检查。
-`Render/Source/MaterialSystemAbi.h` 检查已核对的 `GetHardwareConfig`（14/18）和
-`GetCurrentConfigForVideoCard`（17/21）两个槽位的 x64 指令形状；只忽略地址/成员位移，
-读取范围限定于实际加载的 materialsystem PE 可读/可执行节。槽位只用于检测，后续调用
-仍通过强类型 SDK。两个候选都匹配、都不匹配或内存范围无效时，在首次引擎虚调用前
-拒绝初始化并给出 Lua 错误，不猜测布局。未来编译器改变这些指令形状时需重新核对。
-成功加载后，`mcmesh.EngineBranch` 为 `public` 或 `x86-64`，供控制台确认所选 ABI。
+Public supports Windows x86 and x64; beta builds only a Windows x64 module. The `x86` in the beta branch name does not mean a 32-bit module.
 
-## 上游来源
+`IAppSystemPublic` declares the original five methods. `IAppSystemX86_64` adds beta's `GetDependencies`, `GetTier`, `Reconnect`, and `IsSingleton`. `IAppSystem` retains the Source name for the compile-time default branch. `IMaterialSystemBase<TAppSystem>` shares method declarations, while `IMaterialSystemPublic` and `IMaterialSystemX86_64` use distinct base layouts to avoid conflicting definitions of one type. `IMaterialSystem` remains the compile-time default. Calls use normal C++ virtual dispatch.
 
-来源仓库：`https://github.com/danielga/sourcesdk-minimal`。
+On x64, the DLL entry point first inspects the factory object's material-system ABI without modifying it, selects an implementation, and registers the restore callback. Shared algorithms and Lua exports do not branch. `auto` is the universal x64 build; fixed-branch builds reject the other ABI.
 
-- 复制基线：`x86-64-branch`，提交 `99cafecf352ef5e6af6b1dade2566a8680039152`。
-- public 对照：`master`，提交 `ab7be3ebe52c608bbf7b846f757fe18886b9f305`。
-- Valve 版权声明保留在各文件顶部；分发时同时保留本目录的 `LICENSE` 和
-  `thirdpartylegalnotices.txt`。vendor 中的第三方依赖仍遵守各自许可。
+`BRANCH` identifies the Steam beta selection, not a standalone installation's binary ABI: the local public 2026.09.17 client also returns `x86-64` when that Steam branch is selected. Fixed-public x86 builds retain the `BRANCH=unknown` check.
 
-核心引擎接口：
+`Render/Source/MaterialSystemAbi.h` checks verified x64 instruction shapes for `GetHardwareConfig` (slots 14/18) and `GetCurrentConfigForVideoCard` (17/21), ignoring only addresses and member offsets. Reads are restricted to readable/executable PE sections of the loaded materialsystem module. Slots are used only for detection; subsequent calls use the strongly typed SDK. If both candidates match, neither matches, or a memory range is invalid, initialization fails with a Lua error before any engine virtual call. Compiler changes to these instruction shapes require another audit.
+
+After loading, `mcmesh.EngineBranch` is `public` or `x86-64`.
+
+## Upstream sources
+
+Repository: `https://github.com/danielga/sourcesdk-minimal`.
+
+- Copy baseline: `x86-64-branch`, commit `99cafecf352ef5e6af6b1dade2566a8680039152`.
+- Public comparison: `master`, commit `ab7be3ebe52c608bbf7b846f757fe18886b9f305`.
+- Preserve Valve copyright headers, this directory's `LICENSE`, and `thirdpartylegalnotices.txt` when distributing. Vendored dependencies retain their own licenses.
+
+Core engine interfaces:
 
 ```text
 public/appframework/IAppSystem.h
@@ -61,25 +51,15 @@ public/materialsystem/imaterialsystemhardwareconfig.h
 public/vtf/vtf.h
 ```
 
-本地改动是 `IAppSystem` / `IMaterialSystem` 的显式分支类型和共用声明、
-`gmod/branch.h` 的平台/默认分支约束，以及
-`IMaterialVar`、mesh descriptor 的 x86/x64 大小断言。断言用于约束编译布局，
-不等于已经完成引擎运行时验证。其余声明保留上游形状，不加入未知槽位填充函数。
+Local adaptations comprise explicit branch types and shared declarations for `IAppSystem` / `IMaterialSystem`, platform/default-branch constraints in `gmod/branch.h`, and x86/x64 size assertions for `IMaterialVar` and mesh descriptors. These assertions constrain compiled layouts; they do not establish runtime engine correctness. Other declarations retain upstream shapes, without padding functions for unknown slots.
 
-## 已核对的边界
+## Verified scope
 
-当前以本项目调用的材质、网格、纹理和 VTF 前缀为维护范围，不是完整 Garry's Mod SDK。
-特别是 VTF 尾部在两个分支间存在差异；尚未核对的上游尾部声明不能作为可调用契约，
-不得仅凭头文件存在就新增调用。`server.dll`/`client.dll` 的实体、玩家等接口没有接管。
-GarrysMod Lua 头文件位于 `native/include/GarrysMod/`。
+Maintenance covers the material, mesh, texture, and VTF prefixes used by this project, rather than a complete Garry's Mod SDK. VTF tails differ between branches. Unaudited upstream tail declarations are not callable contracts; a header's presence does not authorize new calls. Entity and player interfaces in `server.dll` / `client.dll` are outside this scope. Garry's Mod Lua headers live in `native/include/GarrysMod/`.
 
-## 更新方式
+## Updating
 
-1. 记录新 DLL 的 SHA-256、分支、PE 时间戳及可用的 depot manifest，再使用其地址做分析；
-   不把旧 RVA 套到自动更新后的 DLL。
-2. 找到工厂实际返回对象及其主/次虚表，核对本项目使用的方法签名、继承和成员偏移。
-   接口版本字符串相同不代表 ABI 相同；同名重载也不能按头文件逐行编号推断 MSVC 槽位。
-3. 在对应 Source 头文件中修改声明，保持类型名和目录；业务代码不维护另一份数字槽位表。
-   未确认的方法不猜签名，不用自动偏移补偿。
-4. 同步构建/SDK 文档。由用户安排两个分支的编译、CPU 回归和 Source 资源实机验收后，
-   才更新验收结论。格式化和 tidy 不扫描本目录。
+1. Record the new DLL's SHA-256, branch, PE timestamp, and available depot manifest before analyzing addresses. Do not reuse old RVAs after automatic updates.
+2. Find the actual factory object's primary and secondary vtables; verify signatures, inheritance, and member offsets. Identical interface-version strings do not imply identical ABIs, and MSVC overload slots cannot be inferred by counting header lines.
+3. Update declarations in the relevant Source headers, retaining names and directories. Business code must not maintain another numeric-slot table. Do not guess unverified signatures or compensate with automatic offsets.
+4. Update build/SDK documentation. Revise verification conclusions only after user-arranged builds for both branches, CPU regressions, and in-engine Source-resource checks. Formatting and tidy exclude this directory.

@@ -139,6 +139,7 @@ local SERVER_FILES = {
 	"mc/api/sv_api.lua",
 	"mc/integration/sv_hand_weapon_bridge.lua",
 	"mc/integration/sv_flashlight.lua",
+	"mc/integration/sv_airboat_water.lua",
 }
 local CLIENT_FILES = {
 	"mc/cl_gc.lua",

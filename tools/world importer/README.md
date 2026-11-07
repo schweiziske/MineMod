@@ -1,6 +1,6 @@
 # World Importer
 
-[简体中文](README_CN.md)
+English | [简体中文](../../docs/zh/tools/world%20importer/README.md)
 
 Import Java Edition Minecraft worlds into Garry's Mod.
 

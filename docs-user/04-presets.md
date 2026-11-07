@@ -1,43 +1,38 @@
-# 建筑预设
+# Building presets
 
-预设把选区保存为可重复放置的建筑。读取只显示投影，左键放置后才修改世界。
-完整世界备份请用[存档](03-saves.md)。
+English | [简体中文](../docs/zh/user/04-presets.md)
 
-取得 **MC 预设放置器**（`mc_preset_placer`），按 R 打开管理器；
-也可输入 `mc_preset_manager`。
+Presets save a selection as a reusable building. Loading displays a projection; the world changes only when you place it with the left mouse button. Use [world saves](03-saves.md) for complete world backups.
 
-## 保存建筑
+Equip the **MC Preset Placer** (`mc_preset_placer`) and press R to open the manager, or enter `mc_preset_manager`.
 
-1. 在管理器输入名称，点击“新建预设”。
-2. 手持预设放置器，左键选择选区的两个对角方块。
-3. 左键选择选区内的基准面，用来对准之后的放置位置。
-4. 再按一次左键截图并保存。
+## Saving a building
 
-选择时右键退回上一步。默认最多保存 100000 个非空气方块，
-由服务器 `mc_preset_max_blocks` 控制。
+1. Enter a name in the manager and click **New preset**.
+2. With the preset placer, left-click two opposite corner blocks.
+3. Left-click a reference face inside the selection to align later placement.
+4. Left-click once more to take a screenshot and save.
 
-## 放置建筑
+Right-click during selection to go back one step. The default limit is 100000 non-air blocks, controlled by server setting `mc_preset_max_blocks`.
 
-在管理器选择预设，点击“读取投影”，回到世界调整位置：
+## Placing a building
 
-| 按键 | 操作 |
-|---|---|
-| G | 每次旋转 90° |
-| E | 切换覆盖模式 |
-| 左键 | 放置 |
-| 右键 | 取消投影 |
-| R | 打开管理器 |
+Select a preset, click **Load projection**, and return to the world to adjust its position:
 
-覆盖关闭时，预设要放置的方块格必须为空；预设中的空格不会清除原有建筑。
-覆盖开启时，会替换整个目标体积，包括清空预设中的空气位置。
+| Key | Action |
+| --- | --- |
+| G | Rotate by 90° |
+| E | Toggle overwrite mode |
+| Left mouse | Place |
+| Right mouse | Cancel the projection |
+| R | Open the manager |
 
-**右键不会撤销已放置的建筑。**
+With overwrite disabled, destination cells for preset blocks must be empty; air in the preset does not remove existing buildings. With overwrite enabled, the entire target volume is replaced, including clearing cells where the preset contains air.
 
-## 权限
+**Right-click does not undo a building already placed.**
 
-默认仅管理员可列出、保存、读取和放置预设。
-`mc_preset_public 1` 可开放给普通玩家；实际放置仍受服务器编辑权限、
-世界边界和方块数量限制。
+## Permissions
 
-投影位置由基准面和旋转决定。位置不合适时重新调整准星或按 G；
-需要更换基准面则重新制作预设。
+By default, only administrators may list, save, load, and place presets. `mc_preset_public 1` grants these actions to ordinary players. Placement still follows server editing permissions, world bounds, and block limits.
+
+The reference face and rotation determine projection alignment. Adjust your aim or press G to reposition it. To change the reference face, create the preset again.

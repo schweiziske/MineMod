@@ -1,97 +1,95 @@
-# ConVar 简洁版：常用设置
+# ConVar quick reference: common settings
 
-本页只列常用设置。全部变量、动态姿态参数与调试项见[ConVar 完整版](09-convar-complete.md)。
+English | [简体中文](../docs/zh/user/08-convar-reference.md)
 
-优先在 `mc_config` 搜索和修改。客户端设置影响自己；
-服务器设置须在服务器控制台或管理员设置页修改。
+This page lists common settings. See the [complete ConVar reference](09-convar-complete.md) for all variables, generated pose parameters, and diagnostics.
 
-在对应控制台直接输入变量名可查看当前值；名称后加值可修改，例如：
+Search and edit settings in `mc_config` first. Client settings affect your own client; change server settings in the server console or the administrator settings page.
+
+Enter a variable name in the appropriate console to read its current value; append a value to change it, for example:
 
 ```text
-mc_language zh_cn
+mc_language en_us
 ```
 
-下表为源码默认值，已有配置和服务器规则可能覆盖它们。
-用 `find mc_` 或 `find mcitem_` 查当前进程实际注册的设置。
+The tables list source defaults; saved configuration and server rules may override them. Use `find mc_` or `find mcitem_` to inspect settings registered in the current process.
 
-## 客户端
+## Client
 
-| 变量 | 默认 | 用途 |
+| Variable | Default | Description |
 |---|---|---|
-| `mc_language` | `auto` | 跟随 GMod，失败时英文；也可选 `zh_cn`、`en_us` |
-| `mc_join_notice` | `1` | 进服时显示操作提示 |
-| `mc_gamemode` | `creative` | 请求切换自己的模式，由服务器确认 |
-| `mc_inventory_hud_scale` | `0` | 生存 HUD 缩放，0 自动 |
-| `mc_inventory_ui_scale` | `0` | 物品栏与容器界面缩放，0 自动 |
-| `mc_inventory_hud_offset_x`、`mc_inventory_hud_offset_y` | `0` | HUD 像素偏移 |
-| `mc_inventory_ui_offset_x`、`mc_inventory_ui_offset_y` | `0` | 物品栏界面偏移 |
-| `mc_inventory_return_button` | `1` | 物品栏返回按钮 |
-| `mc_item_drop_draw_distance` | `96` | 掉落物绘制距离，单位为方块 |
-| `mc_mesh_render` | `1` | 显示世界网格，关闭仍保留碰撞 |
-| `mc_mesh_draw_distance` | `0` | 绘制距离，Source 单位；0 在延迟构建开启时使用其距离，否则不限 |
-| `mc_mesh_build_preset` | `fast` | 构建调度：smooth、fast、loading；手动改预算后为 custom |
-| `mc_client_collision` | `1` | 本地预测碰撞 |
-| `mc_dynamic_lights` | `1` | 动态光源 |
-| `mc_dynamic_flashlight` | `1` | 方块接收手电光束 |
-| `mc_light_entity` | `0` | 实体接收 MC 光照 |
-| `mc_light_entity_players` | `1` | 玩家接收 MC 光照；旧配置若为 0，需在设置中开启 |
-| `mc_light_entity_npcs` | `1` | NPC 和 NextBot 接收 MC 光照 |
+| `mc_language` | `auto` | Follow GMod, falling back to English; also accepts `zh_cn` and `en_us` |
+| `mc_join_notice` | `1` | Show control hints on joining |
+| `mc_gamemode` | `creative` | Request a personal mode change, confirmed by the server |
+| `mc_inventory_hud_scale` | `0` | Survival HUD scale; 0 automatic |
+| `mc_inventory_ui_scale` | `0` | Inventory/container UI scale; 0 automatic |
+| `mc_inventory_hud_offset_x`, `mc_inventory_hud_offset_y` | `0` | HUD offset in pixels |
+| `mc_inventory_ui_offset_x`, `mc_inventory_ui_offset_y` | `0` | Inventory UI offset |
+| `mc_inventory_return_button` | `1` | Inventory return button |
+| `mc_item_drop_draw_distance` | `96` | Item-drop draw distance, blocks |
+| `mc_mesh_render` | `1` | Show world meshes; collision remains when disabled |
+| `mc_mesh_draw_distance` | `0` | Draw distance, Source units; 0 uses the deferred-build distance when enabled, otherwise unlimited |
+| `mc_mesh_build_preset` | `fast` | Build scheduling: smooth, fast, loading; custom after manual budget changes |
+| `mc_client_collision` | `1` | Local prediction collision |
+| `mc_dynamic_lights` | `1` | Dynamic lights |
+| `mc_dynamic_flashlight` | `1` | Blocks receive flashlight beams |
+| `mc_light_entity` | `0` | Entities receive MC lighting |
+| `mc_light_entity_players` | `1` | Players receive MC lighting; enable it in settings if an older configuration has 0 |
+| `mc_light_entity_npcs` | `1` | NPCs and NextBots receive MC lighting |
 
 ### MC Item
 
-需安装 `mc_item`；以下均在客户端修改。
+Requires `mc_item`. Change all settings below on the client.
 
-| 变量 | 默认 | 用途 |
+| Variable | Default | Description |
 |---|---|---|
-| `mcitem_crosshair` | `1` | MC 准星 |
-| `mcitem_attack_indicator` | `1` | 攻击进度：0 关闭、1 准星处 |
-| `mcitem_crosshair_invert` | `1` | 准星反色混合 |
-| `mcitem_hud_scale` | `2` | 准星 / 攻击指示缩放；0 自动 |
-| `mcitem_block_outline` | `1` | 持有 MC Item 时显示方块选中轮廓 |
-| `mcitem_view_bob` | `1` | 手持物走路晃动倍率；0 关闭 |
-| `mcitem_view_sway` | `1` | 手持物转头滞后倍率；0 关闭 |
-| `mcitem_name_tag_scale` | `2.5` | 命名牌文字大小倍率 |
+| `mcitem_crosshair` | `1` | MC crosshair |
+| `mcitem_attack_indicator` | `1` | Attack progress: 0 off, 1 at the crosshair |
+| `mcitem_crosshair_invert` | `1` | Inverted-color crosshair blending |
+| `mcitem_hud_scale` | `2` | Crosshair/attack indicator scale; 0 automatic |
+| `mcitem_block_outline` | `1` | Selected-block outline while holding MC Item |
+| `mcitem_view_bob` | `1` | Held-item walking bob multiplier; 0 off |
+| `mcitem_view_sway` | `1` | Held-item lag when turning; 0 off |
+| `mcitem_name_tag_scale` | `2.5` | Name-tag text scale |
 
-## 服务器权限与玩法
+## Server permissions and gameplay
 
-| 变量 | 默认 | 用途 |
+| Variable | Default | Description |
 |---|---|---|
-| `mc_admin_only` | `0` | 1 限制管理员编辑方块 |
-| `mc_default_gamemode` | `creative` | 新玩家模式，不覆盖玩家已保存的模式 |
-| `mc_allow_gamemode_switch` | `1` | 允许普通玩家切换自己的模式 |
-| `mc_inventory_creative` | `1` | 允许创造物品栏的目录和复制操作 |
-| `mc_inventory_persist` | `1` | 保存玩家物品栏 |
-| `mc_keep_inventory` | `0` | 1 死亡保留物品栏与装备 |
-| `mc_use_interact` | `1` | 右键与可使用的 MC 方块交互 |
-| `mc_save_public` | `0` | 1 开放列出、保存和读档；删除仍限管理员 |
-| `mc_preset_public` | `0` | 1 开放列出、保存、读取和放置预设 |
-| `mc_cluster_public` | `0` | 1 开放结构搬运器 |
-| `mc_workshop_manage` | `0` | 工坊权限：0 超级管理员、1 管理员、2 所有人 |
-| `mc_autosave` | `0` | 定时保存间隔秒数，0 关闭；写地图默认档 |
+| `mc_admin_only` | `0` | 1 restricts block editing to administrators |
+| `mc_default_gamemode` | `creative` | New-player mode; preserves a player's saved mode |
+| `mc_allow_gamemode_switch` | `1` | Allow regular players to change their own mode |
+| `mc_inventory_creative` | `1` | Allow creative inventory catalog and duplication |
+| `mc_inventory_persist` | `1` | Save player inventories |
+| `mc_keep_inventory` | `0` | 1 preserves inventory and equipment on death |
+| `mc_use_interact` | `1` | Right-click usable MC blocks to interact |
+| `mc_save_public` | `0` | 1 allows listing, saving, and loading; deletion remains administrator-only |
+| `mc_preset_public` | `0` | 1 allows listing, saving, loading, and placing presets |
+| `mc_cluster_public` | `0` | 1 allows the structure mover |
+| `mc_workshop_manage` | `0` | Workshop permissions: 0 superadmins, 1 admins, 2 everyone |
+| `mc_autosave` | `0` | Save interval in seconds; 0 off; writes the map's default save |
 
-## 服务器建造限制
+## Server building limits
 
-| 变量 | 默认 | 用途 |
+| Variable | Default | Description |
 |---|---|---|
-| `mc_world_limit` | `1024` | 每个坐标轴的最大绝对方块坐标 |
-| `mc_max_blocks` | `0` | 世界方块总数上限，0 不限 |
-| `mc_fill_max` | `100000` | 单次填充体积上限，0 不限 |
-| `mc_import_max` | `0` | 单次导入方块数上限，0 不限 |
-| `mc_preset_max_blocks` | `100000` | 预设非空气方块数上限，0 不限 |
-| `mc_block_damage` | `1` | 允许 GMod 伤害破坏方块 |
+| `mc_world_limit` | `1024` | Maximum absolute block coordinate on each axis |
+| `mc_max_blocks` | `0` | World block limit; 0 unlimited |
+| `mc_fill_max` | `100000` | Maximum volume per fill; 0 unlimited |
+| `mc_import_max` | `0` | Maximum blocks per import; 0 unlimited |
+| `mc_preset_max_blocks` | `100000` | Maximum non-air preset blocks; 0 unlimited |
+| `mc_block_damage` | `1` | Allow GMod damage to break blocks |
 
-`mc_reach` 控制玩家编辑距离，使用 Source 单位；默认按方块尺寸计算，0 关闭距离检查。
+`mc_reach` controls player editing distance in Source units. Its default is calculated from block size; 0 disables the distance check.
 
-## 光影参数与排障
+## Shader settings and troubleshooting
 
-当前光影包的参数请用[光影页](06-shader-packs.md)或 `mc_render_pack_settings` 查看，
-例如 PBR 阴影分辨率使用包内的 `shadow_resolution`，
-不能用旧 `mc_shadow_size` 代替。
+Use the [shader settings page](06-shader-packs.md) or `mc_render_pack_settings` to inspect the current shader pack's parameters. For example, PBR shadow resolution uses the pack's `shadow_resolution`, separately from the legacy `mc_shadow_size`.
 
-| 命令 | 用途 |
+| Command | Purpose |
 |---|---|
-| `mc_client_diag` | 客户端诊断 |
-| `mc_native_status` | Native 后端状态 |
-| `mc_save_diag` | 服务器存档诊断 |
+| `mc_client_diag` | Client diagnostics |
+| `mc_native_status` | Native backend status |
+| `mc_save_diag` | Server save diagnostics |
 
-排障时提供完整错误、复现步骤以及所选材质包和光影包。
+When reporting an issue, include the complete error, reproduction steps, and selected resource and shader packs.

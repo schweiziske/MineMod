@@ -1,6 +1,6 @@
 # World Importer
 
-[English](README.md)
+[English](../../../../tools/world%20importer/README.md) | 简体中文
 
 把 Java 版 Minecraft 存档中的世界导入到 Garry's Mod。
 

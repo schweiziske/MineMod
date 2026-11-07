@@ -1,49 +1,43 @@
-# 光影包
+# Shader packs
 
-光影包控制阴影、反射、曝光等画面效果；[材质包](05-resource-packs.md)控制贴图。
-两者分别选择。
+English | [简体中文](../docs/zh/user/06-shader-packs.md)
 
-## 选择与调节
+Shader packs control shadows, reflections, exposure, and other effects. [Resource packs](05-resource-packs.md) control textures. Select them independently.
 
-打开 `mc_config → 客户端设置 → 界面 → 光影`，先选择已安装的光影包：
+## Selection and settings
 
-| 包 | 用途 |
-|---|---|
-| Vanilla（`mc:vanilla`） | 默认画面 |
-| PBR（`mc:pbr`） | PBR 材质、太阳阴影、反射及屏幕后效，需安装对应 addon |
+Open `mc_config → Client settings → Interface → Shaders` and select an installed pack:
 
-下面的参数和预设由当前光影包提供，不是所有包都有相同选项。
+| Pack | Purpose |
+| --- | --- |
+| Vanilla (`mc:vanilla`) | Default rendering |
+| PBR (`mc:pbr`) | PBR materials, sunlight shadows, reflections, and screen effects; requires its addon |
 
-玩家、NPC、道具的受光可在“光照 → 实体与载具光照”中开启总开关和对应类型。
-已有配置里的玩家开关若为关闭，需要手动开启。PBR 的模型投影另由
-`mc_pbr_shadow_entities` 控制；Vanilla 目前不提供模型实时投影阴影。
+The active pack supplies the parameters and presets below. Different packs may expose different options.
 
-PBR 提供“最低、低、中、高、完全”五档，默认“高”。
-帧率不足时先选“低”或“中”；还可减少反射、体积光、阴影分辨率及范围。
+Enable the main switch and relevant entity types under **Lighting → Entity and vehicle lighting** to light players, NPCs, and props. If your saved player-lighting setting is disabled, enable it manually. PBR model shadows are separately controlled by `mc_pbr_shadow_entities`; Vanilla currently has no real-time model shadows.
 
-手动修改后显示“自定义”。“另存为”可保存用户预设；内置预设只读。
-标题栏的眼睛按钮可临时隐藏窗口，便于观察画面。
+PBR includes **Minimum, Low, Medium, High, Full** presets, with **High** as default. For better frame rates, try Low or Medium, or reduce reflections, volumetric lighting, shadow resolution, and shadow range.
 
-## 控制台命令
+Manual changes display **Custom**. **Save as** stores a user preset; built-in presets are read-only. The eye button in the title bar temporarily hides the window for inspecting the scene.
 
-在自己的客户端控制台执行：
+## Console commands
 
-| 命令 | 作用 |
-|---|---|
-| `mc_render_pack select mc:pbr` | 选择 PBR |
-| `mc_render_pack select mc:vanilla` | 选择 Vanilla |
-| `mc_render_pack off` | 同样切回默认 Vanilla，不是停用全部渲染 |
-| `mc_render_pack_settings` | 列出当前包的参数、默认值和范围 |
-| `mc_render_pack_set <键> <值>` | 修改当前包的参数 |
-| `mc_render_pack_reset` | 恢复当前包的默认预设 |
-| `mc_render_pack_preset list` | 列出当前包的预设 |
-| `mc_render_pack_preset apply builtin:low` | 应用 PBR 内置低档 |
+Run these in your client console:
 
-光影参数与用户预设保存在客户端 `garrysmod/data/mc/shaderpacks/config/`，
-不随世界存档保存，也不是普通 ConVar。
+| Command | Purpose |
+| --- | --- |
+| `mc_render_pack select mc:pbr` | Select PBR |
+| `mc_render_pack select mc:vanilla` | Select Vanilla |
+| `mc_render_pack off` | Return to default Vanilla; does not disable all rendering |
+| `mc_render_pack_settings` | List the current pack's parameters, defaults, and ranges |
+| `mc_render_pack_set <key> <value>` | Change a parameter |
+| `mc_render_pack_reset` | Restore the pack's default preset |
+| `mc_render_pack_preset list` | List presets |
+| `mc_render_pack_preset apply builtin:low` | Apply PBR's built-in Low preset |
 
-## 画面异常
+Shader settings and user presets reside on the client under `garrysmod/data/mc/shaderpacks/config/`. They are not part of world saves or ordinary ConVars.
 
-先对出问题的光影包执行 `mc_render_pack_reset`。
-仍异常时切回 Vanilla，并检查光影 addon、材质包和客户端控制台错误。
-PBR 的阴影等参数应在光影页修改，旧的 `mc_shadow_*` 变量不能代替当前包的参数。
+## Rendering problems
+
+Run `mc_render_pack_reset` for the affected pack. If the problem remains, return to Vanilla and check the shader addon, resource pack, and client console errors. Change PBR shadow parameters on the shader page; legacy `mc_shadow_*` variables do not replace the active pack's settings.
