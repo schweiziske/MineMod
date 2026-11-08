@@ -151,7 +151,7 @@ Most of these settings are server-side, archived, notified, and replicated to cl
 
 | ConVar | Default | Description |
 | --- | --- | --- |
-| `mc_daycycle` | `1` | Server MC day/night cycle; enabled by default. |
+| `mc_daycycle` | `0` | Server MC day/night cycle; disabled by default, so lighting follows the map sun. |
 | `mc_daycycle_paused` | `0` | Pause world time; unpausing resumes from the frozen time. |
 | `mc_daycycle_length` | `1200` | Real seconds per full MC day; 1200 equals vanilla's 20 minutes. |
 | `mc_daycycle_sun_tilt` | `0.2` | Lateral sun-path tilt used by the shadow map to avoid purely axial shadows. |
