@@ -38,6 +38,25 @@ MC.EntityLightingGain = CreateClientConVar(
 	"mc_light_entity_gain", "0.48", true, false,
 	"Exposure multiplier for Minecraft-lit Source entities"
 )
+-- [BMB 2026-11-08] Source HDR auto-exposure. In HDR the engine multiplies every
+-- standard-shader draw (VertexLitGeneric/UnlitGeneric) by the current
+-- tone-mapping scale (mat_autoexposure_min/max, default 0.5..2), but the MC
+-- terrain programs (screenspace_general_8tex + custom ps30, see
+-- tools/shader_compiler/shadersrc/l2/*/passes/surface.fxh) never read it, so
+-- MC-lit entities drift against the terrain as the eye adapts. Draw them at
+-- scale 1, the exposure the terrain is effectively rendered at. 0 = old path.
+MC.EntityLightingUnitTonemap = CreateClientConVar(
+	"mc_light_entity_unit_tonemap", "1", true, false,
+	"Draw Minecraft-lit Source entities at tone-mapping scale 1 like MC terrain (ignores Source HDR auto-exposure); 0 = engine exposure"
+)
+-- [BMB 2026-11-08] At scale 1 the Minecraft-faithful multiplier is 1: entity
+-- brightness = lightmap value of its cell, like a terrain face under the same
+-- light. Kept apart from mc_light_entity_gain because that archived 0.48 was
+-- tuned under engine exposure and mc_item still reads it for its own models.
+MC.EntityLightingUnitGain = CreateClientConVar(
+	"mc_light_entity_unit_gain", "1", true, false,
+	"Exposure multiplier for Minecraft-lit Source entities while mc_light_entity_unit_tonemap is 1; 1 matches terrain"
+)
 MC.EntityLightingReflections = CreateClientConVar(
 	"mc_light_entity_reflections", "0.35", true, false,
 	"Reflection strength for Minecraft-lit entities; also scales with sampled brightness"
@@ -113,6 +132,10 @@ local function entityClassEnabled( ent )
 end
 
 local function gain()
+	-- [BMB 2026-11-08] Unit-tonemap draws use their own, terrain-matched gain.
+	if MC.EntityLightingUnitTonemap:GetBool() then
+		return math.Clamp( MC.EntityLightingUnitGain:GetFloat(), 0, 1 )
+	end
 	return math.Clamp( MC.EntityLightingGain and MC.EntityLightingGain:GetFloat() or 0.48, 0, 1 )
 end
 
@@ -277,6 +300,7 @@ end
 -- Own the ambient cube for this draw. Multiplying Source's baked lighting
 -- by MC light applies two unrelated worlds' lighting, and setting the cube
 -- without suppression lets StudioRender replace it during DrawModel.
+local UNIT_TONE = Vector( 1, 1, 1 ) -- [BMB 2026-11-08] see mc_light_entity_unit_tonemap
 local function beginModelLighting( ent, player, state )
 	local r, g, b = sampledRGB( ent, player )
 	if not r then return end
@@ -288,9 +312,19 @@ local function beginModelLighting( ent, player, state )
 	render.SuppressEngineLighting( true )
 	render.SetLocalModelLights()
 	render.ResetModelLighting( r ^ gamma, g ^ gamma, b ^ gamma )
+	-- [BMB 2026-11-08] Same exposure as the terrain for this draw only.
+	if MC.EntityLightingUnitTonemap:GetBool() then
+		state.tone = render.GetToneMappingScaleLinear()
+		render.SetToneMappingScaleLinear( UNIT_TONE )
+	end
 end
 
 local function endModelLighting( state )
+	-- [BMB 2026-11-08] Restore the engine exposure before anything can return.
+	if state.tone then
+		render.SetToneMappingScaleLinear( state.tone )
+		state.tone = nil
+	end
 	if state.lighting then
 		render.ResetModelLighting( 1, 1, 1 )
 		render.SuppressEngineLighting( false )
