@@ -115,7 +115,9 @@ local function lightingColor( entity )
 		entity.MCNextLightSample = current + 0.1
 		local r, g, b = 1, 1, 1
 		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( entity:GetPos(), 0 ) end
-		if MC.ScaleDynamicLightingRGB then r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, 0.48 ) else r, g, b = r * 0.48, g * 0.48, b * 0.48 end
+		local legacyGain = 0.48 -- [BMB 2026-11-09] unit gain under unit tonemap
+		if MC.EntityExposureGain then legacyGain = MC.EntityExposureGain( legacyGain ) end
+		if MC.ScaleDynamicLightingRGB then r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, legacyGain ) else r, g, b = r * legacyGain, g * legacyGain, b * legacyGain end
 		entity.MCBoatColor = Color( math.floor( math.Clamp( r * 255, 0, 255 ) + 0.5 ),
 			math.floor( math.Clamp( g * 255, 0, 255 ) + 0.5 ), math.floor( math.Clamp( b * 255, 0, 255 ) + 0.5 ), 255 )
 	end
@@ -162,10 +164,12 @@ function ENT:Draw()
 	local body = raft and RAFT_BODY or BOAT_BODY
 	local left = paddlePart( raft, 1, interpolatedPaddlePhase( self, 1 ) % TWO_PI )
 	local right = paddlePart( raft, 2, interpolatedPaddlePhase( self, 2 ) % TWO_PI )
+	if MC.BeginEntityUnitExposure then MC.BeginEntityUnitExposure() end -- [BMB 2026-11-09]
 	mesh.Begin( MATERIAL_QUADS, ( #body + #left + #right ) * 6 )
 	for _, part in ipairs( body ) do drawCube( part, color, 128, 64, scale ) end
 	for _, part in ipairs( left ) do drawCube( part, color, 128, 64, scale ) end
 	for _, part in ipairs( right ) do drawCube( part, color, 128, 64, scale ) end
 	mesh.End()
+	if MC.EndEntityUnitExposure then MC.EndEntityUnitExposure() end
 	cam.PopModelMatrix()
 end

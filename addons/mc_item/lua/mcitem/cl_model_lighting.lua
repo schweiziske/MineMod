@@ -45,12 +45,19 @@ local function sampleInterval(entity)
     return math.Clamp(interval or 0.10, 0, 2)
 end
 
+-- [BMB 2026-11-09] Under mc_light_entity_unit_tonemap the draw runs at tone
+-- scale 1, so the exposure-tuned legacy gain is replaced by the unit gain.
+local function exposureGain(legacyGain)
+    if MC and isfunction(MC.EntityExposureGain) then return MC.EntityExposureGain(legacyGain) end
+    return legacyGain
+end
+
 local function entityGain(entity)
     local gain = tonumber(entity and entity.MCLightGain)
     if gain == nil and MC and MC.EntityLightingGain then
         gain = MC.EntityLightingGain:GetFloat()
     end
-    return math.Clamp(gain or 0.48, 0, 1)
+    return math.Clamp(exposureGain(gain or 0.48), 0, 1)
 end
 
 function Lighting.SamplePosition(entity)
@@ -173,9 +180,11 @@ function Lighting.Draw(entity, samplePosition, drawCallback, emission)
     -- Pass the active modulation into nested passes. In particular, the
     -- enchantment glint temporarily changes color modulation and must restore
     -- this sampled RGB instead of forcing the remainder of the scope white.
+    if sampled and MC and MC.BeginEntityUnitExposure then MC.BeginEntityUnitExposure() end -- [BMB 2026-11-09]
     local ok, err = pcall(drawCallback, drawR, drawG, drawB, sampled,
         glintR, glintG, glintB)
 
+    if sampled and MC and MC.EndEntityUnitExposure then MC.EndEntityUnitExposure() end
     if sampled then
         render.SetColorModulation(1, 1, 1)
         render.SuppressEngineLighting(false)

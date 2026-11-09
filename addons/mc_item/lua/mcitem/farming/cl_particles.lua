@@ -173,6 +173,9 @@ local function initialVelocity(blockSize)
 end
 
 local function scaleParticleLight(r, g, b)
+    -- [BMB 2026-11-09] unit gain while the mesh draws at tone scale 1
+    local gain = LIGHT_GAIN
+    if MC and isfunction(MC.EntityExposureGain) then gain = MC.EntityExposureGain(gain) end
     r = math.Clamp(tonumber(r) or 1, 0, 1)
     g = math.Clamp(tonumber(g) or r, 0, 1)
     b = math.Clamp(tonumber(b) or r, 0, 1)
@@ -180,14 +183,14 @@ local function scaleParticleLight(r, g, b)
     local api = MC and MC.API or nil
     local light = api and api.Light or nil
     if light and isfunction(light.ScaleRGB) then
-        local ok, scaledR, scaledG, scaledB = pcall(light.ScaleRGB, r, g, b, LIGHT_GAIN)
+        local ok, scaledR, scaledG, scaledB = pcall(light.ScaleRGB, r, g, b, gain)
         if ok and scaledR ~= nil and scaledG ~= nil and scaledB ~= nil then
             return math.Clamp(scaledR, 0, 1),
                 math.Clamp(scaledG, 0, 1),
                 math.Clamp(scaledB, 0, 1)
         end
     end
-    return r * LIGHT_GAIN, g * LIGHT_GAIN, b * LIGHT_GAIN
+    return r * gain, g * gain, b * gain
 end
 
 local function sampleParticleLight(position)
@@ -421,6 +424,7 @@ hook.Add("PreDrawTranslucentRenderables", DRAW_HOOK, function(drawingDepth, draw
     if drawCount == 0 then return end
 
     render.SetMaterial(material)
+    if MC and MC.BeginEntityUnitExposure then MC.BeginEntityUnitExposure() end -- [BMB 2026-11-09]
     mesh.Begin(MATERIAL_QUADS, drawCount)
     for index = 0, drawCount - 1 do
         local base = index * DRAW_STRIDE
@@ -437,6 +441,7 @@ hook.Add("PreDrawTranslucentRenderables", DRAW_HOOK, function(drawingDepth, draw
         addVertex(px - sx - tx, py - sy - ty, pz - sz - tz, 0, 1, r, g, b)
     end
     mesh.End()
+    if MC and MC.EndEntityUnitExposure then MC.EndEntityUnitExposure() end
 end)
 
 hook.Remove("InitPostEntity", "MCITEM.FarmingGrowthParticles.Clear")

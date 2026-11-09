@@ -422,7 +422,9 @@ local function merchantTitle( state )
 		or "entity.minecraft.villager." .. profession
 	if not MC.I18n.Has( key, MC.I18n.BASE_LOCALE ) then key = "entity.minecraft.villager" end
 	if state.showProgressBar and state.level >= 1 and state.level <= 5 then
-		return MC.T( "merchant.title", { { key = key }, { key = "merchant.level." .. state.level } } )
+		-- MC.T only interpolates flat values; nested { key = ... } specs printed as
+		-- "table: 0x..." here. I18n.Resolve translates them first.
+		return MC.I18n.Resolve( "merchant.title", { { key = key }, { key = "merchant.level." .. state.level } } )
 	end
 	return MC.T( key )
 end

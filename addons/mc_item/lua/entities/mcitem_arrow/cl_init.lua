@@ -118,6 +118,8 @@ local function sampleProjectileLight(position)
         if ok and r ~= nil and g ~= nil and b ~= nil then
             local gain = 0.48
             if MC.EntityLightingGain then gain = MC.EntityLightingGain:GetFloat() end
+            -- [BMB 2026-11-09] unit gain while the draw runs at tone scale 1
+            if isfunction(MC.EntityExposureGain) then gain = MC.EntityExposureGain(gain) end
 
             local scaleRGB = mcLightFn("ScaleRGB", "ScaleDynamicLightingRGB")
             if scaleRGB then
@@ -204,7 +206,9 @@ function ENT:Draw()
 
     local materialOverride = self:GetSpectralArrow() and spectralArrowMaterial or nil
     if materialOverride then render.MaterialOverride(materialOverride) end
+    if r ~= nil and MC and MC.BeginEntityUnitExposure then MC.BeginEntityUnitExposure() end -- [BMB 2026-11-09]
     local ok, err = pcall(self.DrawModel, self)
+    if r ~= nil and MC and MC.EndEntityUnitExposure then MC.EndEntityUnitExposure() end
     if materialOverride then render.MaterialOverride() end
 
     if r ~= nil then

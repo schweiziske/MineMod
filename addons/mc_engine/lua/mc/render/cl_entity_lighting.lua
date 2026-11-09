@@ -139,6 +139,47 @@ local function gain()
 	return math.Clamp( MC.EntityLightingGain and MC.EntityLightingGain:GetFloat() or 0.48, 0, 1 )
 end
 
+-- [BMB 2026-11-09] Public unit-exposure helpers for other MC-lit draws
+-- (minecarts, boats, primed TNT, items, particles). Inactive = legacy path.
+function MC.EntityUnitExposureActive()
+	return render.SetToneMappingScaleLinear ~= nil and MC.EntityLightingUnitTonemap:GetBool()
+end
+
+function MC.EntityExposureGain( legacyGain )
+	if MC.EntityUnitExposureActive() then
+		return math.Clamp( MC.EntityLightingUnitGain:GetFloat(), 0, 1 )
+	end
+	return legacyGain
+end
+
+local unitExposureDepth, unitExposureSaved = 0, nil
+local UNIT_EXPOSURE_TONE = Vector( 1, 1, 1 )
+local unitExposureFrame = -1
+function MC.BeginEntityUnitExposure()
+	-- A draw that errored between Begin/End must not pin the depth forever.
+	local frame = FrameNumber()
+	if frame ~= unitExposureFrame then
+		unitExposureFrame = frame
+		unitExposureDepth, unitExposureSaved = 0, nil
+	end
+	if unitExposureDepth > 0 then
+		unitExposureDepth = unitExposureDepth + 1
+		return
+	end
+	if not MC.EntityUnitExposureActive() then return end
+	unitExposureSaved = render.GetToneMappingScaleLinear()
+	unitExposureDepth = 1
+	render.SetToneMappingScaleLinear( UNIT_EXPOSURE_TONE )
+end
+
+function MC.EndEntityUnitExposure()
+	if unitExposureDepth <= 0 then return end
+	unitExposureDepth = unitExposureDepth - 1
+	if unitExposureDepth > 0 then return end
+	if unitExposureSaved then render.SetToneMappingScaleLinear( unitExposureSaved ) end
+	unitExposureSaved = nil
+end
+
 local function reflectionStrength()
 	return math.Clamp( MC.EntityLightingReflections and MC.EntityLightingReflections:GetFloat() or 0.35, 0, 1 )
 end

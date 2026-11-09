@@ -133,8 +133,13 @@ local USE_INTERACT_OWN_COLLISION = {
 	mc_collision_carrier = true,
 }
 
+-- Source's +use only reaches entities within PLAYER_USE_RADIUS (80u) of the eye;
+-- beyond it the server never fires PlayerUse, so the inventory key must not be eaten.
+local USE_REACH_SQR = 82 * 82
+
 local function traceHasForeignUseTarget( trace )
 	if not trace or trace.HitWorld or not IsValid( trace.Entity ) then return false end
+	if trace.StartPos and trace.HitPos and trace.StartPos:DistToSqr( trace.HitPos ) > USE_REACH_SQR then return false end
 	-- Players have no native +use action; looking at one must not eat the inventory key.
 	if trace.Entity:IsPlayer() then return false end
 	return USE_INTERACT_OWN_COLLISION[trace.Entity:GetClass()] ~= true

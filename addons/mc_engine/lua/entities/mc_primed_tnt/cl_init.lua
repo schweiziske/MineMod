@@ -26,8 +26,10 @@ local function worldLightingColor( entity, position )
 		entity.MCNextLightSample = current + 0.1
 		local r, g, b = 1, 1, 1
 		if MC.SampleDynamicLightingRGB then r, g, b = MC.SampleDynamicLightingRGB( position, 0 ) end
-		if MC.ScaleDynamicLightingRGB then r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, 0.48 )
-		else r, g, b = r * 0.48, g * 0.48, b * 0.48 end
+		local legacyGain = 0.48 -- [BMB 2026-11-09] unit gain under unit tonemap
+		if MC.EntityExposureGain then legacyGain = MC.EntityExposureGain( legacyGain ) end
+		if MC.ScaleDynamicLightingRGB then r, g, b = MC.ScaleDynamicLightingRGB( r, g, b, legacyGain )
+		else r, g, b = r * legacyGain, g * legacyGain, b * legacyGain end
 		entity.MCTntColor = Color(
 			math.floor( math.Clamp( r, 0, 1 ) * 255 + 0.5 ),
 			math.floor( math.Clamp( g, 0, 1 ) * 255 + 0.5 ),
@@ -150,8 +152,10 @@ function ENT:Draw()
 	local drawSize = size * ( 1 + swell )
 	local position = self:GetPos() + Vector( 0, 0, size * 0.5 )
 	local color = worldLightingColor( self, position )
+	if MC.BeginEntityUnitExposure then MC.BeginEntityUnitExposure() end -- [BMB 2026-11-09]
 	renderer.DrawDroppedBlock( { item = "minecraft:tnt", count = 1 }, position, angle_zero, drawSize, color, {
 		displayContext = "ground",
 	} )
+	if MC.EndEntityUnitExposure then MC.EndEntityUnitExposure() end
 	if math.floor( fuse / 5 ) % 2 == 0 then drawWhiteOverlay( position, drawSize ) end
 end
