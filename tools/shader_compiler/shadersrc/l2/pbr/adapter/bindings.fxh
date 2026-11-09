@@ -5,7 +5,7 @@
 float4x4 MCModelViewProjection : register(c4);
 float4x3 MCModel : register(c58);
 #else
-float4 MCQuadParams : register(c0); // normalized shadow bias, shadow strength, corner-atlas bank, alpha cutoff
+float4 MCQuadParams : register(c0); // normalized shadow bias, shadow strength, corner layout/bank, alpha cutoff
 float4 MCEyeExposure : register(c1); // current engine-space camera, exposure
 float4 MCSunDirection : register(c2); // direction toward the sun, direct radiance
 float4 MCSunColor : register(c3); // linear sun RGB, environment intensity

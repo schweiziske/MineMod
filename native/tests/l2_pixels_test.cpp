@@ -29,9 +29,9 @@ std::shared_ptr<const LightPixels> pixels(unsigned count, uint32_t color)
 	std::fill(result->occlusion.begin(), result->occlusion.end(), color ^ 0xff123456);
 	return result;
 }
-void runs()
+void runs(int width)
 {
-	const int	   width = 16384, height = 16384;
+	const int	   height = width;
 	const unsigned capacity = width * (height / 5);
 	for (unsigned first : {0u, 4095u, 16383u, AtlasQuads - 8, AtlasQuads, capacity - 8})
 	{
@@ -177,7 +177,8 @@ int main()
 {
 	try
 	{
-		runs();
+		for (const int width : {4096, 8192, 16384})
+			runs(width);
 		transactions();
 		queuedTransactions();
 		std::cout << "PASS: retained pixel ownership, exact RGBA/AO runs, banks, batch commit, partial/late rollback and lifetime\n";

@@ -163,6 +163,7 @@ GMOD_MODULE_OPEN()
 	fa.AddFunction("DrawL2AtlasPixels", GTLUAF(mcmesh::pixelbindings::Draw));
 	fa.AddFunction("L2PixelTextureVersion", GTLUAF(mcmesh::pixelbindings::Version));
 	fa.AddFunction("L2LightTextureRevision", GTLUAF(mcmesh::pixelbindings::DeviceRevision));
+	fa.AddFunction("GetL2PixelTextureLimits", GTLUAF(mcmesh::pixelbindings::DeviceLimits));
 	fa.AddFunction("CreateL2PixelTexture", GTLUAF(mcmesh::pixelbindings::Create));
 	fa.AddFunction("UploadL2PixelTexture", GTLUAF(mcmesh::pixelbindings::Upload));
 	fa.AddFunction("FlushL2PixelTextures", GTLUAF(mcmesh::pixelbindings::Flush));

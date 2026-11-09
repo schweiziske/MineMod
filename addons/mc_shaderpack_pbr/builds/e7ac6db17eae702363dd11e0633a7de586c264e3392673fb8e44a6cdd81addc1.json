@@ -1,0 +1,484 @@
+{
+  "schema": 1,
+  "phase": "offline_candidate",
+  "gpuReady": false,
+  "build": "e7ac6db17eae702363dd11e0633a7de586c264e3392673fb8e44a6cdd81addc1",
+  "binding": {
+    "id": "mc:pbr_quad_v5",
+    "revision": 5,
+    "cornerAtlasVersion": 1,
+    "material": "screenspace_general_8tex",
+    "layout": "mc:quad_corners_v1",
+    "vertexInputs": [
+      "POSITION0",
+      "TEXCOORD0",
+      "COLOR0"
+    ],
+    "vertexConstants": [
+      4,
+      5,
+      6,
+      7,
+      58,
+      59,
+      60
+    ],
+    "pixelConstants": [
+      0,
+      1,
+      2,
+      3,
+      11,
+      12,
+      13,
+      14
+    ],
+    "samplers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "ibl": "Filament-style GGX split sum; s6=512x256 RGBM64 octahedral roughness atlas (4x2 tiles, 128 stride, 2 padding), s7=128x128 RG/BA packed 16-bit DFG A/B",
+    "shadow": "2x4 point-filter RGBA8 atlas: near/far columns; ordinary opaque, water, first sky entrance, interior opaque rows. RG is 16-bit little-endian depth. Water BA is red/blue sunlight /4. Shadow c0=forward/inverse range, c1=origin/cutoff, c2=clip enable/inverse sky width/inverse sky height/interior row pixel offset; s1=separate 2x1 sky entrance depth. Single entrance per light ray; v1-v4 keep their 2x2 atlas.",
+    "normal": "RGB tangent-space XYZ UNORM; +Y follows increasing texture V; A scales dielectric F0 = 0.04*A (metals use albedo F0)",
+    "cornerAtlas": "s1=square 16384/8192/4096 point-filter RGBA8; four corner rows plus one RGBA AO row per group; COLOR0 retains bank-local corner addresses; c0.z=bank+64*(16384/atlasSize-1), each bank contains 1048576 quads",
+    "orm": "RGBA UNORM = occlusion, perceptual roughness, signed material byte (128 dielectric, 255 metal, 1 thin transmission), emissive albedo scale",
+    "materialEncoding": "orm_signed_metal_subsurface_v1",
+    "colorPolicy": "sRGB albedo/lightmap reads; linear data maps and corner bytes; linear BRDF and tone mapping; sRGB output",
+    "geometryPolicy": "geometric normals from world-position derivatives; no NORMAL input or geometry rebuild",
+    "dynamicLights": "Local GGX light draw after affected terrain/block-entity/water meshes. s2=64x1 point-filter RGBA8, five texels per light, at most eight. c0=inverseBlockSize,0,cornerLayout,count; cornerLayout=bank+64*(16384/atlasSize-1); c1=render-space eye/exposure. Water uses the identical c15..18 wave/optics constants. Depth test without writes, additive RGB preserving destination alpha.",
+    "water": {
+      "version": 1,
+      "programs": [
+        "water_vertex",
+        "water"
+      ],
+      "vertexColor": "R/G=block/sky times 16, B=0..16 block water depth, A=shore weight; waves are independent of sprite UVs",
+      "pixelConstants": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "samplers": [
+        0,
+        2,
+        3,
+        5,
+        6
+      ],
+      "normal": "s3=256x256 repeating XYZ normal, A=foam noise, smooth mipmapped linear data; PNG import requires noclamp",
+      "transform": "invviewprojmat transports wrapped chunk phase/inverse block size, motion, scattering/foam, absorption/reflection",
+      "passes": "current-view scene copy followed by one translucent colour draw per fluid batch; depth test without depth write"
+    },
+    "waterSSR": {
+      "version": 1,
+      "programs": [
+        "scene_depth_vertex",
+        "scene_depth",
+        "ssr_copy_vertex",
+        "ssr_copy",
+        "water_ssr",
+        "water_ssr_composite"
+      ],
+      "depth": "GMod SSAO DepthWrite COLOR_DEPTH: linear perspective clip W / 4000 in red; engine scene depth redraw plus MC alpha-tested depth draws",
+      "trace": "half-resolution RGBA16F: hit UV, receiver view depth in Source units, confidence; up to 48 deterministic steps and five binary refinements",
+      "composition": "four receiver-depth-aware point taps replace only environmental reflection; pre-water colour source prevents feedback; main-view colour/depth generation must match"
+    },
+    "gpuReady": false
+  },
+  "experimentalGPUAnimation": false,
+  "maxPixelInstructionSlots": 4066,
+  "notices": [
+    {
+      "path": "third_party/filament/LICENSE",
+      "sha256": "f4fe379e2fb014a378b89f5d3f63bfd3fdee9d6e514ded6b6723a1762be65d9e"
+    },
+    {
+      "path": "third_party/filament/NOTICE.md",
+      "sha256": "ac971043d284da81e036866c809b86df03d9b40157323b3b59d4c938d83f32a4"
+    },
+    {
+      "path": "third_party/complementary/NOTICE.md",
+      "sha256": "f84f9d4f7ed6c1803171c893bc56147471eded124cdaed5939c4706d55096f54"
+    },
+    {
+      "path": "third_party/threejs/LICENSE",
+      "sha256": "5d5dad8147523d59bc15cca838ae0bdaae7075230ec49132c551a1d18e7b3412"
+    },
+    {
+      "path": "third_party/threejs/NOTICE.md",
+      "sha256": "22e4ee9f8337b1552b270292fdfd0e095e8801daa32248bb89803ba07556da19"
+    },
+    {
+      "path": "third_party/polyhaven/environment.json",
+      "sha256": "4077f453e21afd8cfe8464be26ace7282215c08374de71dda899ee43770c66af"
+    }
+  ],
+  "programs": {
+    "vertex": {
+      "name": "mc_pbr_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "da82cfae7a05e79b25dfd46a758f7771286a3d69bf20f900a00e50ae9fde10ea",
+      "bytes": 478,
+      "profile": "vs_3_0",
+      "instructionHash": "da5cdbfc23a98962d31c8ad625faf00c5356f4d3ed1b8b352258cb5352f17c88"
+    },
+    "opaque": {
+      "name": "mc_pbr_opaque_e7ac6db17eae702363dd_ps30",
+      "sha256": "7599dfd03e2b68110dc9d53a3c72621f6fe17c987fbe77fab31e9ac164afead7",
+      "bytes": 9363,
+      "profile": "ps_3_0",
+      "instructionHash": "41940d81f1d23829a95b60297f9f6229214851b515fa4d26d3d9b3171f9a6d0d"
+    },
+    "cutout": {
+      "name": "mc_pbr_cutout_e7ac6db17eae702363dd_ps30",
+      "sha256": "994644af0bc4e671969e298297f32503f4dba6a6eac822b559e36b0904bf799f",
+      "bytes": 9278,
+      "profile": "ps_3_0",
+      "instructionHash": "c60b800b80ee1ae736b0675bcee45eb72b261608e0e1aad7c023e434ac0faba9"
+    },
+    "translucent": {
+      "name": "mc_pbr_translucent_e7ac6db17eae702363dd_ps30",
+      "sha256": "9a0842090e2b2e21456ae0fda9bcc8456baa804bf558eb615a12b4e8f13a0c14",
+      "bytes": 9295,
+      "profile": "ps_3_0",
+      "instructionHash": "25bc632b94ddc05121447964e1ef26ea72680b2b195bbdfd0f213570fa0e6e14"
+    },
+    "shadow_vertex": {
+      "name": "mc_pbr_shadow_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "30b7d38d9147039ae54949a828988017d8bc34ef4044a4f1358020854ffb2734",
+      "bytes": 287,
+      "profile": "vs_3_0",
+      "instructionHash": "75248b3885fe27fff827fc8df5ffd8e083be18af07faecdb9ceae82fd2464251"
+    },
+    "shadow": {
+      "name": "mc_pbr_shadow_e7ac6db17eae702363dd_ps30",
+      "sha256": "7b4b50d33896df97f39e8fe8e22264f4f11148ffc3dec0b779e68a2dbd139eaa",
+      "bytes": 1995,
+      "profile": "ps_3_0",
+      "instructionHash": "356939a39feed89bf3b11ed4a22ba6b4978676ec6a07968b2c3eadc54dd92cca"
+    },
+    "block_entity_vertex": {
+      "name": "mc_pbr_block_entity_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "52d8b7df051540cf2cbceefce219564901b7924fb9aee40afd3f443b6d399f41",
+      "bytes": 341,
+      "profile": "vs_3_0",
+      "instructionHash": "2ea9d63c48b0c3fb161ee2a9af732bc3a96e21764387b9a5d7cae4955cf7f6b7"
+    },
+    "block_entity": {
+      "name": "mc_pbr_block_entity_e7ac6db17eae702363dd_ps30",
+      "sha256": "619a65df67031b529f4beb0cd8600b96db04950f6686cf6e343f0623a912a00b",
+      "bytes": 8627,
+      "profile": "ps_3_0",
+      "instructionHash": "2f20bfeae574fde2393e53e45231cf1a44f2beb6d67734aebdb2508039b50c2c"
+    },
+    "water_vertex": {
+      "name": "mc_pbr_water_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "951d511c41b14afd8a48bb25426ac90fccacb605683089c9e6558cb5fe2b26d3",
+      "bytes": 328,
+      "profile": "vs_3_0",
+      "instructionHash": "4983cfdadac46df2224fbb39c08cf0e50564c18e6816472488adda32b539ca93"
+    },
+    "water": {
+      "name": "mc_pbr_water_e7ac6db17eae702363dd_ps30",
+      "sha256": "e488a9e5e1b01c8ad76c299ad45e31b1470b4ed216125d041ad99b6fd0866c7e",
+      "bytes": 3133,
+      "profile": "ps_3_0",
+      "instructionHash": "492a4f91f9c86894f77a111796a1559159744f1b7828ae1f7594f1f494b3728f"
+    },
+    "water_shadow": {
+      "name": "mc_pbr_water_shadow_e7ac6db17eae702363dd_ps30",
+      "sha256": "d9a81d535d4182522d6e1add306a2b9015a67dbf8bb86d34ee64988a297eb4c2",
+      "bytes": 405,
+      "profile": "ps_3_0",
+      "instructionHash": "6b7dc08f384ef0d082e01ac7940bf0aea809b459566b659a2ca2caf1ad2f58f3"
+    },
+    "water_caustics": {
+      "name": "mc_pbr_water_caustics_e7ac6db17eae702363dd_ps30",
+      "sha256": "4537d3e10e639c091f28d7e7cd7aece2cf2a3c5578ff78096485d96383441a0c",
+      "bytes": 2613,
+      "profile": "ps_3_0",
+      "instructionHash": "4eecec3bd6161834e2402e2f25e8e2ccec74e9baae76c23db1b55bfd0a2a8b4c"
+    },
+    "scene_depth_vertex": {
+      "name": "mc_pbr_scene_depth_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "5870dbbdcaf3e54f97865d971655c94b552e0c5a4495a241106f002d06cb8fec",
+      "bytes": 274,
+      "profile": "vs_3_0",
+      "instructionHash": "d3eb47b7ffcf1908ac5559f8349f8ceffd420f59b19c88601670c0e96ba07282"
+    },
+    "scene_depth": {
+      "name": "mc_pbr_scene_depth_e7ac6db17eae702363dd_ps30",
+      "sha256": "ad792a1cf50cc01c61a6a198f060c012e1f96b69bfd2bddc7785fa495de201d8",
+      "bytes": 2145,
+      "profile": "ps_3_0",
+      "instructionHash": "65ed86b298b98fe90aa02c3b25f48458c34cf0aa94ca630f0aea3b3dcf6cee07"
+    },
+    "ssr_copy_vertex": {
+      "name": "mc_pbr_ssr_copy_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "02f773dcc9f4d54e02fbd5d1620c9777bc3347b99c4140cada37e38f0914bd8b",
+      "bytes": 192,
+      "profile": "vs_3_0",
+      "instructionHash": "b211977ec1572ea733a34e4d6637a1f7bf73f8e163b9ef75ae2bcba5b457f28b"
+    },
+    "ssr_copy": {
+      "name": "mc_pbr_ssr_copy_e7ac6db17eae702363dd_ps30",
+      "sha256": "157b37174dc7a793fe7ff9e051a3904711dac79ddf277c96092ba5affc3bb135",
+      "bytes": 218,
+      "profile": "ps_3_0",
+      "instructionHash": "625cd298c85e602e38a2305bbf69a709d31144c3d282a280ab82051c2128b6b0"
+    },
+    "ssr_source": {
+      "name": "mc_pbr_ssr_source_e7ac6db17eae702363dd_ps30",
+      "sha256": "22adfc7d12d658913ece0a399696f4bcfd40bd1a803a06330faa38b5a0f63858",
+      "bytes": 660,
+      "profile": "ps_3_0",
+      "instructionHash": "77de15c35826b2965e1ab2a5073d4de99b986ac8f5c3aeb355e6b02e2577d647"
+    },
+    "water_ssr": {
+      "name": "mc_pbr_water_ssr_e7ac6db17eae702363dd_ps30",
+      "sha256": "330759adf0ad0f73614d0b01cbd0c7e4e96f391acd63a00f705369effa992e2f",
+      "bytes": 2027,
+      "profile": "ps_3_0",
+      "instructionHash": "5a0e992528f34b5105ed010fec197428c5b287a8450e22523d35ced7c56cb747"
+    },
+    "water_ssr_composite": {
+      "name": "mc_pbr_water_ssr_composite_e7ac6db17eae702363dd_ps30",
+      "sha256": "bb4025e40d18cc3fe2e2b958a87959c332023bf3fa5768b5e083b4d1825d038e",
+      "bytes": 2434,
+      "profile": "ps_3_0",
+      "instructionHash": "5610796c6720f5a58cf0a9fd564cd8922cedd2f7b693b6896daae4e4c7e0a210"
+    },
+    "block_ssr": {
+      "name": "mc_pbr_block_ssr_e7ac6db17eae702363dd_ps30",
+      "sha256": "10f91aa0966133ee76cb69a3c4d4dbabf3108978c73f68814fafad65355fabb6",
+      "bytes": 7860,
+      "profile": "ps_3_0",
+      "instructionHash": "e2ed21e7a453ac04fc8ddd6b2ba286d1467cbcf886da041f552c6ecb8c0da4a1"
+    },
+    "dynamic_opaque": {
+      "name": "mc_pbr_dynamic_opaque_e7ac6db17eae702363dd_ps30",
+      "sha256": "8e930d037a5c95dd7935ce94ffa38912670083944858190c9a3d1ef538eb755b",
+      "bytes": 8178,
+      "profile": "ps_3_0",
+      "instructionHash": "f17be9595a644132940d31d9c0b1e5f84801d3c876da1e9bf6194a0ba64f235d"
+    },
+    "dynamic_cutout": {
+      "name": "mc_pbr_dynamic_cutout_e7ac6db17eae702363dd_ps30",
+      "sha256": "1f68ca94072c65586a56015c1efa28684df192bef81ce4e87a89612daa00df02",
+      "bytes": 8101,
+      "profile": "ps_3_0",
+      "instructionHash": "2b17b34c9eadf84048d4855e36811158f5e9f039f3f4438f6d75dc037ecf3148"
+    },
+    "dynamic_translucent": {
+      "name": "mc_pbr_dynamic_translucent_e7ac6db17eae702363dd_ps30",
+      "sha256": "d7ecd67795e239b0ca5f5ae2986f697f618f94d01f7ddc366a6152edce9c7bbe",
+      "bytes": 8261,
+      "profile": "ps_3_0",
+      "instructionHash": "0a65260cc72ac1f32814720a0cd6cb9a0aa6f953773737b82bbe83172360c8b0"
+    },
+    "dynamic_block_entity": {
+      "name": "mc_pbr_dynamic_block_entity_e7ac6db17eae702363dd_ps30",
+      "sha256": "dee346390cbeee00b31889a3623232bf9401d147fbb7a5073ab267f0dd5e565c",
+      "bytes": 7603,
+      "profile": "ps_3_0",
+      "instructionHash": "af2b7e7ba011f895f1969d7b5397f98902a0586a937e036143bcf54fa709f5ce"
+    },
+    "dynamic_water": {
+      "name": "mc_pbr_dynamic_water_e7ac6db17eae702363dd_ps30",
+      "sha256": "dea3e03ea40d18e6af094db8833a0de932e49207572204b96ee87a44ea35e807",
+      "bytes": 2020,
+      "profile": "ps_3_0",
+      "instructionHash": "54950e3d6b79ae143e7ebb949822e8674331da14be57574916c071e9d4ba5e52"
+    },
+    "dynamic_sprite_vertex": {
+      "name": "mc_pbr_dynamic_sprite_vertex_e7ac6db17eae702363dd_vs30",
+      "sha256": "306f3233825cd5007bb772b216cc9f441a6a74dd70ec446accf2464e230bf655",
+      "bytes": 336,
+      "profile": "vs_3_0",
+      "instructionHash": "5c1bc768904e950d8c83966b26cf79fff5de332ef02fedbac2d1f681ef6a7160"
+    },
+    "dynamic_sprite": {
+      "name": "mc_pbr_dynamic_sprite_e7ac6db17eae702363dd_ps30",
+      "sha256": "8c8681d645e2576f93a1a39b405093cfabf0d4cedb465a3f18313ab38c9b790e",
+      "bytes": 2062,
+      "profile": "ps_3_0",
+      "instructionHash": "e85b998ae9a752e6c834268e26966eb24597ceccd7eef7f13b9eee5425a0198c"
+    },
+    "post_ssao": {
+      "name": "mc_pbr_post_ssao_e7ac6db17eae702363dd_ps30",
+      "sha256": "2a858c5e84e0304fa8f3d1d0e5b8e47b95f85c98dd75ef770c1b5db5b49c33d8",
+      "bytes": 1381,
+      "profile": "ps_3_0",
+      "instructionHash": "e585b5a9c3c775947f94390e09bff0857f5f386946bf1212d8b66284c9474fe9"
+    },
+    "post_ssao_composite": {
+      "name": "mc_pbr_post_ssao_composite_e7ac6db17eae702363dd_ps30",
+      "sha256": "88080a3160b1277bd0068d04e66bd4abb10ad99e4436b2a6331027d054048fb6",
+      "bytes": 795,
+      "profile": "ps_3_0",
+      "instructionHash": "04f8a620fbdf56ce92f611aaeec438c3078ef902c6a567a353cd4555264f96c3"
+    },
+    "post_scene_depth": {
+      "name": "mc_pbr_post_scene_depth_e7ac6db17eae702363dd_ps30",
+      "sha256": "a82f77a70f96295012a4f3a2631d8a6ad6fc758067070c4ccb9dcddb4922243a",
+      "bytes": 1842,
+      "profile": "ps_3_0",
+      "instructionHash": "8734e6bb5ce5887ccf0cc3f87d3bc2fb0c9f71a174ac95621dea6f388c6061ac"
+    },
+    "post_depth_copy": {
+      "name": "mc_pbr_post_depth_copy_e7ac6db17eae702363dd_ps30",
+      "sha256": "91b144eeb99cee277c6ab166f310059b0345ad9a947ace96f662e4d46f9a8f83",
+      "bytes": 279,
+      "profile": "ps_3_0",
+      "instructionHash": "6da51f3f2161845b2d9daefd50dd21d074cd5e0a1113b9f3acafe3cee3ae9d04"
+    },
+    "post_fog": {
+      "name": "mc_pbr_post_fog_e7ac6db17eae702363dd_ps30",
+      "sha256": "bc0d9ab6e767c1e2decdd9c4e186125afec16743d8698dd90f4f0945d5542f7c",
+      "bytes": 975,
+      "profile": "ps_3_0",
+      "instructionHash": "e79f2bca535630a3c8cd9cbf7846a67ad0c8acf86229adf2b34ee92565b0f416"
+    },
+    "post_bloom_prefilter": {
+      "name": "mc_pbr_post_bloom_prefilter_e7ac6db17eae702363dd_ps30",
+      "sha256": "3953a70885d042a6e8d93710993fdbf46116d7fffdc36b1c0118e6281bc06429",
+      "bytes": 784,
+      "profile": "ps_3_0",
+      "instructionHash": "c18f78d6016742cbb726c7d41d2840b84448f2021b664d8ffb619ccb3d67b0fc"
+    },
+    "post_bloom_blur": {
+      "name": "mc_pbr_post_bloom_blur_e7ac6db17eae702363dd_ps30",
+      "sha256": "8f6498d333dc889883ac22ace2cd71176041b62f247bf69760ce12ab09891a69",
+      "bytes": 364,
+      "profile": "ps_3_0",
+      "instructionHash": "cb094f3d8ed007c9749d69c8b7c7a25e90dde777fbda442fad2655b8704452f3"
+    },
+    "post_bloom_composite": {
+      "name": "mc_pbr_post_bloom_composite_e7ac6db17eae702363dd_ps30",
+      "sha256": "1c40213a05533e4f3340a3066dfe88af336e47505d87245239f97927c892de6d",
+      "bytes": 340,
+      "profile": "ps_3_0",
+      "instructionHash": "7ceccc455cf1a1219591ee8180b0acf3278f9ccadd2026a26808d5a0dc2adc33"
+    },
+    "post_volumetric": {
+      "name": "mc_pbr_post_volumetric_e7ac6db17eae702363dd_ps30",
+      "sha256": "13b45823dbf6b185cdfcb9fb92b0c9185f3987b02887401b0e6c73a3ff989b41",
+      "bytes": 1783,
+      "profile": "ps_3_0",
+      "instructionHash": "19e221169de2f799ce8318e81047dbf74ead1838834006f900ff57b412807794"
+    },
+    "post_volumetric_composite": {
+      "name": "mc_pbr_post_volumetric_composite_e7ac6db17eae702363dd_ps30",
+      "sha256": "d25171e633dfa8f6f14ad526f4c35fe5af311f24115d97c6d03c5fa31acf94cb",
+      "bytes": 1631,
+      "profile": "ps_3_0",
+      "instructionHash": "642548110e20f0469fc300299c96d7709a2020a7198a9df5bb15883fa023c8af"
+    },
+    "post_exposure_meter": {
+      "name": "mc_pbr_post_exposure_meter_e7ac6db17eae702363dd_ps30",
+      "sha256": "1843650bcc23da7010cd5506ca370987570f30df3df03a0607f9b41792162b58",
+      "bytes": 499,
+      "profile": "ps_3_0",
+      "instructionHash": "c346e607195350ea1421731d23f55f04747176612f9dae2c3dd752edeada5051"
+    },
+    "post_exposure_reduce": {
+      "name": "mc_pbr_post_exposure_reduce_e7ac6db17eae702363dd_ps30",
+      "sha256": "d6c8349216fecb2df139dac15c71a5f3e84799c388f56172dd932a5a60709121",
+      "bytes": 354,
+      "profile": "ps_3_0",
+      "instructionHash": "685cc33c586f426e315df1053d45be21a6964da10208811db8fa0362c01c14aa"
+    },
+    "post_exposure_adapt": {
+      "name": "mc_pbr_post_exposure_adapt_e7ac6db17eae702363dd_ps30",
+      "sha256": "0792c3e184ca4283c08b20a98dfae9bbb6ad051d6b9d773ae846d1a66608a254",
+      "bytes": 605,
+      "profile": "ps_3_0",
+      "instructionHash": "40ad1a4fe37045e7010672df1ef3782ea3f23f939445c3c43e7ae311643162b5"
+    },
+    "post_exposure_composite": {
+      "name": "mc_pbr_post_exposure_composite_e7ac6db17eae702363dd_ps30",
+      "sha256": "71b792ef1095ec13a0bbff43345e1042b688a21eb4896d344ec22b37c8ff9d5f",
+      "bytes": 523,
+      "profile": "ps_3_0",
+      "instructionHash": "dfa2694dd29af88bb5096f639ed7c53176027eebb01d9f88a8ccaca352044b90"
+    },
+    "post_taa": {
+      "name": "mc_pbr_post_taa_e7ac6db17eae702363dd_ps30",
+      "sha256": "f69d3b8946d83cfb8b8622a7881518646765c82a8c52b7709b59d0aca418db49",
+      "bytes": 1883,
+      "profile": "ps_3_0",
+      "instructionHash": "9b1e5859761a9307dbee70eb86e9dac124f5645aa1c7764bafb662c35441b901"
+    },
+    "opaque_no_sky": {
+      "name": "mc_pbr_opaque_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "cd209e26ab13bf72f4f9ac80ee5dd8fa8d8637076bb085a76343bf194d61844f",
+      "bytes": 9220,
+      "profile": "ps_3_0",
+      "instructionHash": "0e308dc8dc2303beb275c259ff48705fae000ac75445aef8c3f211c130783631"
+    },
+    "cutout_no_sky": {
+      "name": "mc_pbr_cutout_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "3896746a264bb80f7cd2c7d624edda222b771138ead462eb4ce068c31c0052a1",
+      "bytes": 9122,
+      "profile": "ps_3_0",
+      "instructionHash": "f99403392406420c3aeaa8b4a1f4e90b5de758c3fe100c24cc397c5d7462212a"
+    },
+    "translucent_no_sky": {
+      "name": "mc_pbr_translucent_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "aff41aee53518ac45876d3b7b642e1375bcd6286ab5f7f6733ac7321cc06abbb",
+      "bytes": 9173,
+      "profile": "ps_3_0",
+      "instructionHash": "10b5b06aee9a5d0752b4ce6cd78d5567084675d0fbb003f38ef3b427a56bf991"
+    },
+    "block_entity_no_sky": {
+      "name": "mc_pbr_block_entity_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "7da450a6050daf5ce53e83abd6668651827ba3d61388089e2ac1a760016d1d9e",
+      "bytes": 8518,
+      "profile": "ps_3_0",
+      "instructionHash": "312406777fa1bf56a0e98c546a6c40eef5fc04ec2a50209bacda46bb0f3e7548"
+    },
+    "water_no_sky": {
+      "name": "mc_pbr_water_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "8e9f192e5eead8414408ecb2a2eadf697528e2588481f77c6a9647bd7190efbc",
+      "bytes": 2917,
+      "profile": "ps_3_0",
+      "instructionHash": "636090be210a5e92a23a6e5ba013adbe9aea2391178c47d13ce29bd05ce1d3e4"
+    },
+    "shadow_no_sky": {
+      "name": "mc_pbr_shadow_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "a1f52ff1ae99c7f98dc054e11d8b4a674a44d142364719c9695bf3b3dba30dfb",
+      "bytes": 2229,
+      "profile": "ps_3_0",
+      "instructionHash": "95bda3bf287feb5fb41f4956eb74b75d10109447b0c8be416f784f15dd9aa42a"
+    },
+    "water_caustics_no_sky": {
+      "name": "mc_pbr_water_caustics_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "8d21e37a63d910b2cae1afff05abcc2840831c6e985feaa012d3c16c4d567b95",
+      "bytes": 2606,
+      "profile": "ps_3_0",
+      "instructionHash": "03fe7c08c2a7729efa9ebe536a2e06a8859d3c0058c467b867e2fd04d2a0dbcc"
+    },
+    "post_volumetric_no_sky": {
+      "name": "mc_pbr_post_volumetric_no_sky_e7ac6db17eae702363dd_ps30",
+      "sha256": "765a090cd779cc5de3dd3d1cb57137b018f969027b6c4b3eb63d22a6d2c44d45",
+      "bytes": 1703,
+      "profile": "ps_3_0",
+      "instructionHash": "87b4b266d58ee133a2d15e279109005cdbeff585ce08297b8b50a714478c04b8"
+    }
+  }
+}

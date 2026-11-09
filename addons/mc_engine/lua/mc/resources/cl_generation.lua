@@ -1,5 +1,5 @@
--- Render-safe bake. The coordinator may yield at safe boundaries after five
--- seconds to present progress; short bakes still finish in one callback.
+-- Render-safe bake. The coordinator may yield at safe boundaries after half
+-- a second to present progress; short bakes still finish in one callback.
 MC = MC or {}
 MC.ResourceGeneration = MC.ResourceGeneration or {}
 local G = MC.ResourceGeneration

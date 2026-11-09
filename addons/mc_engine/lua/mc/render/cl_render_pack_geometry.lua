@@ -28,7 +28,7 @@ local function allocate( count )
 		end
 	end
 	error( { code = "render_pack_atlas_budget",
-		message = "no contiguous quad range available within the shared 16384x16384 corner/AO atlas" }, 0 )
+		message = "no contiguous quad range available within the shared " .. R.ATLAS_SIZE .. "x" .. R.ATLAS_HEIGHT .. " corner/AO atlas" }, 0 )
 end
 
 local function freeRange( first, count )

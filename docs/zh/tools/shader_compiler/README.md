@@ -26,9 +26,29 @@ node tools/shader_compiler/build_skybox_block.cjs
 
 三个入口均接受 `--game <GMod的garrysmod目录>`、`--toolchain <编译器目录>` 和 `--python <Python程序>`。默认游戏目录为 `D:/steam/steamapps/common/GarrysMod/garrysmod`，Python 使用 PATH 中的 `python`。Vanilla 和 PBR 还支持 `--compiler <ShaderCompile程序>` 使用兼容的现代编译器。
 
-Vanilla/PBR 编译后会校验 SM3 字节码，并更新对应 `addons/mc_shaderpack_*` 下的 `.vcs`、描述文件及构建记录。PBR 入口还会清理该包不再引用的旧 `.vcs`。Skybox 更新 `addons/mc_skybox_block`。这些操作会修改工作区，但不会启动游戏或创建提交。
+Vanilla/PBR 编译后会校验 SM3 字节码，并更新对应 `addons/mc_shaderpack_*` 下的 `.vcs`、描述文件及构建记录。两套入口都在新描述文件发布成功后，清理该包不再引用、带构建指纹的旧 `.vcs`。Skybox 更新 `addons/mc_skybox_block`。这些操作会修改工作区，但不会启动游戏或创建提交。
 
 Vanilla/PBR 的 `--stage-only` 只准备编译输入，不运行编译器、不发布 shader。它仍会创建临时目录并检查所需资源。
+
+不重新编译，只清理旧构建：
+
+```powershell
+node tools/shader_compiler/build_l2_vanilla.cjs --prune-only
+node tools/shader_compiler/build_l2_pbr.cjs --prune-only
+```
+
+清理依据是已发布描述文件中的顶点和像素 Shader 引用，不是描述文件的构建哈希。
+描述文件无效，或任一引用文件缺失、为空时停止清理。仅删除属于该包、
+文件名带构建指纹的普通 `.vcs` 文件，保留其他文件、构建记录和编译中间产物。
+
+## 顶点光照图集绑定
+
+Vanilla 和 PBR 在包定义中发布 `cornerAtlasVersion: 1`，声明支持正方形
+16K、8K、4K 顶点光照/AO 图集。引擎在 8K/4K 布局下会拒绝旧定义。
+`COLOR0` 保持 bank 内局部地址，每个 bank 包含 1,048,576 个面。
+材质参数为 `bank + 64 * (16384 / atlasSize - 1)`，基础/PBR 通道使用
+`c0.z`，Vanilla 动态光照使用 `c0.y`。Shader 采样前解码 bank 和实际尺寸，
+无需改变顶点 ABI。
 
 ## 显示文字与设置
 

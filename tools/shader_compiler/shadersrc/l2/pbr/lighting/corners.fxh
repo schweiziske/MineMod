@@ -38,9 +38,9 @@ void mcPBRCorners(MCPBRFragment input, out float2 lightBytes, out float3 tint, o
     shade = input.weights.b;
     occlusion = 1.0f;
 #else
-    float2 pixel = mcCornerAtlasPixel(input.quadAddressOpacity.xy, MCQuadParams.z);
+    float4 pixel = mcCornerAtlasPixel(input.quadAddressOpacity.xy, MCQuadParams.z);
     float2 uv = mcCornerAtlasUV(pixel);
-    float2 stepX = float2(1.0f / 16384.0f, 0.0f);
+    float2 stepX = float2(pixel.z, 0.0f);
     float4 b0 = floor(tex2Dlod(MCQuadVertices, float4(uv, 0, 0)) * 255.0f + 0.5f);
     float4 b1 = floor(tex2Dlod(MCQuadVertices, float4(uv + stepX, 0, 0)) * 255.0f + 0.5f);
     float4 b2 = floor(tex2Dlod(MCQuadVertices, float4(uv + stepX * 2, 0, 0)) * 255.0f + 0.5f);

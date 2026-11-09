@@ -30,6 +30,7 @@ public:
 	PixelTextureStore &operator=(const PixelTextureStore &) = delete;
 
 	PixelTextureStats	   Create(int inWidth, int inHeight, bool inPointSample);
+	PixelTextureDimensions GetDeviceLimits() const;
 	PixelTextureDimensions GetDimensions(PixelTextureId inId) const;
 	PixelTextureStats	   GetTextureStats(PixelTextureId inId) const;
 	PixelTextureStoreStats GetStats() const;

@@ -26,9 +26,30 @@ node tools/shader_compiler/build_skybox_block.cjs
 
 All three accept `--game <GMod-garrysmod-directory>`, `--toolchain <compiler-directory>`, and `--python <Python-executable>`. The default game directory is `D:/steam/steamapps/common/GarrysMod/garrysmod`; Python defaults to `python` on PATH. Vanilla and PBR also accept `--compiler <ShaderCompile-executable>` for a compatible modern compiler.
 
-Vanilla/PBR builds validate SM3 bytecode and update the corresponding `addons/mc_shaderpack_*` `.vcs` files, descriptors, and build records. PBR also removes unused old `.vcs` files. Skybox updates `addons/mc_skybox_block`. These commands modify the workspace without launching the game or creating commits.
+Vanilla/PBR builds validate SM3 bytecode and update the corresponding `addons/mc_shaderpack_*` `.vcs` files, descriptors, and build records. Both remove unreferenced build-named `.vcs` files only after publishing the new descriptor. Skybox updates `addons/mc_skybox_block`. These commands modify the workspace without launching the game or creating commits.
 
 For Vanilla/PBR, `--stage-only` prepares compiler inputs without compiling or publishing. It still creates a temporary directory and checks required resources.
+
+To clean earlier builds without recompiling:
+
+```powershell
+node tools/shader_compiler/build_l2_vanilla.cjs --prune-only
+node tools/shader_compiler/build_l2_pbr.cjs --prune-only
+```
+
+Cleanup uses the published descriptor's vertex and pixel references, not its build
+hash. It stops if the descriptor is invalid or any referenced shader is missing or
+empty. Only regular build-named `.vcs` files owned by that pack are removed;
+other files, build records, and compiler intermediates are left unchanged.
+
+## Corner atlas binding
+
+Vanilla and PBR publish `cornerAtlasVersion: 1` in their pack definitions. This
+declares support for square 16K, 8K, and 4K corner/AO atlases. The engine rejects
+older definitions on 8K/4K layouts. `COLOR0` remains bank-local; each bank holds
+1,048,576 quads. The material parameter is `bank + 64 * (16384 / atlasSize - 1)`,
+in `c0.z` for base/PBR passes and `c0.y` for Vanilla dynamic lights. Shaders decode
+both the bank and physical dimensions before sampling. No vertex ABI change is needed.
 
 ## Display text and settings
 

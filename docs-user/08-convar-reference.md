@@ -28,6 +28,7 @@ The tables list source defaults; saved configuration and server rules may overri
 | `mc_inventory_return_button` | `1` | Inventory return button |
 | `mc_item_drop_draw_distance` | `96` | Item-drop draw distance, blocks |
 | `mc_mesh_render` | `1` | Show world meshes; collision remains when disabled |
+| `mc_light_atlas_size` | `auto` | Lighting atlas: Auto (largest supported), `16384`, `8192`, or `4096`; manual sizes must be supported; reconnect to apply |
 | `mc_mesh_draw_distance` | `0` | Draw distance, Source units; 0 uses the deferred-build distance when enabled, otherwise unlimited |
 | `mc_mesh_build_preset` | `fast` | Build scheduling: smooth, fast, loading; custom after manual budget changes |
 | `mc_client_collision` | `1` | Local prediction collision |

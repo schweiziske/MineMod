@@ -275,7 +275,8 @@ function D.RegisterMaterial( base, program, owner, source, stage, blockSize, map
 		["$linearread_basetexture"] = pbr and maps.colorSpace ~= "linear"
 			and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
 		["$linearread_texture2"] = 1, ["$linearwrite"] = pbr and 0 or 1,
-		["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = pbr and "0" or tostring( atlasBank or 0 ), ["$c0_z"] = pbr and tostring( atlasBank or 0 ) or "1", ["$c0_w"] = "0",
+		["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = pbr and "0" or tostring( MC.RenderL2Resources.AtlasParameter( atlasBank ) ),
+		["$c0_z"] = pbr and tostring( MC.RenderL2Resources.AtlasParameter( atlasBank ) ) or "1", ["$c0_w"] = "0",
 		["$c1_x"] = "0", ["$c1_y"] = "0", ["$c1_z"] = "0", ["$c1_w"] = "1",
 	}
 	if pbr then

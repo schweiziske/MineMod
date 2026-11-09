@@ -297,10 +297,15 @@ Lua 侧的对应文件：
 | L2 建面 | `CompileL2Template`/`Cube`/`Model`/`Fluid`、`SubmitL2Section`、`SubmitWorldL2Section`、`SubmitWorldL2Relight`、`PollL2Section`、`CanSubmitL2`、`CancelL2Section`、`GetL2SectionParts`、`GetWorldL2Topology`、`IsWorldL2Current`、`IsWorldL2GeometryCurrent`、`UploadL2PartNative`、`UploadL2MeshPixels`、`StageL2Relight`、`UploadL2Relight`、`UploadL2RelightBatch`、`FinishL2Relight`、`GetL2Stats` |
 | L2 诊断 | `BuildL2Mesh`、`UploadL2Part`、`GetL2LightPart`、`ReadL2MeshPixels` |
 | L2 绘制 | `CreateL2DrawScene`、`PatchL2DrawScene`、`SetL2DrawGraph`、`SetL2DrawSpatialGraph`、`DrawL2Scene`、`DrawL2SceneBatched`、`L2DrawStats` |
-| 像素纹理 | `CreateL2PixelTexture`、`UploadL2PixelTexture`、`FlushL2PixelTextures`、`BindL2PixelTexture`、`ReleaseL2PixelTexture`、`GetL2PixelTextureStats` |
+| 像素纹理 | `GetL2PixelTextureLimits`、`CreateL2PixelTexture`、`UploadL2PixelTexture`、`FlushL2PixelTextures`、`BindL2PixelTexture`、`ReleaseL2PixelTexture`、`GetL2PixelTextureStats` |
 | 资源包与图集 | `ListResourcePackSources`、`OpenResourcePackSource`、`ReadResourcePackSource`、`ResourcePackSourceUnchanged`、`CloseResourcePackSource`、`HashResourceBytes`、`CreateAtlasSprite`、`SampleAtlasSprite`、`UpdateAtlasSpriteTexture`、`ReleaseAtlasSprite`、`GetAtlasSpriteStats`、`CreateAtlasTexture`、`UploadAtlasTextureRect`、`FlushAtlasTexture`、`FlushAtlasTextureUpdates`、`BindAtlasTexture`、`ReleaseAtlasTexture`、`GetAtlasTextureStats` |
 | 旧 L1 | `Handshake`、`SetAtlasPageMaterial`、`SetBlockDefs`、`SetLightDefs`、`CreateChunk`、`ApplyChunk`、`SetCellsBatch`、`SetCell`、`Think`、`DrawChunk`、`DrawVisible`、光照重建、光照图集、压缩补丁解码及 `Debug*` 等 |
 | 已移除 | `DrawL2MeshPixels`、`DrawL2Relight`、`DrawL2AtlasPixels` 仍保留名称，调用即返回错误 `l2_pixel_rectangles_removed_restart_with_current_lua` |
+
+`GetL2PixelTextureLimits()` 在 Lua/渲染线程查询当前 Source 硬件配置，
+返回 `{ maxWidth, maxHeight }` 或 `nil, error`；创建纹理使用相同上限。
+硬件配置接口缺失、上限无效、请求尺寸超限分别报告不同错误。
+客户端每次连接解析一次 `mc_light_atlas_size`，见[光照图集分辨率](user/06-shader-packs.md#光照图集分辨率)。
 
 Lua 分三层检查兼容性：
 

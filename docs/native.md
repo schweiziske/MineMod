@@ -292,10 +292,15 @@ All exports are registered in `native/Module/Module.cpp` under global `mcmesh`. 
 | L2 meshing | `CompileL2Template`/`Cube`/`Model`/`Fluid`, `SubmitL2Section`, `SubmitWorldL2Section`, `SubmitWorldL2Relight`, `PollL2Section`, `CanSubmitL2`, `CancelL2Section`, `GetL2SectionParts`, `GetWorldL2Topology`, `IsWorldL2Current`, `IsWorldL2GeometryCurrent`, `UploadL2PartNative`, `UploadL2MeshPixels`, `StageL2Relight`, `UploadL2Relight`, `UploadL2RelightBatch`, `FinishL2Relight`, `GetL2Stats` |
 | L2 diagnostics | `BuildL2Mesh`, `UploadL2Part`, `GetL2LightPart`, `ReadL2MeshPixels` |
 | L2 drawing | `CreateL2DrawScene`, `PatchL2DrawScene`, `SetL2DrawGraph`, `SetL2DrawSpatialGraph`, `DrawL2Scene`, `DrawL2SceneBatched`, `L2DrawStats` |
-| Pixel textures | `CreateL2PixelTexture`, `UploadL2PixelTexture`, `FlushL2PixelTextures`, `BindL2PixelTexture`, `ReleaseL2PixelTexture`, `GetL2PixelTextureStats` |
+| Pixel textures | `GetL2PixelTextureLimits`, `CreateL2PixelTexture`, `UploadL2PixelTexture`, `FlushL2PixelTextures`, `BindL2PixelTexture`, `ReleaseL2PixelTexture`, `GetL2PixelTextureStats` |
 | Resource packs and atlases | `ListResourcePackSources`, `OpenResourcePackSource`, `ReadResourcePackSource`, `ResourcePackSourceUnchanged`, `CloseResourcePackSource`, `HashResourceBytes`, `CreateAtlasSprite`, `SampleAtlasSprite`, `UpdateAtlasSpriteTexture`, `ReleaseAtlasSprite`, `GetAtlasSpriteStats`, `CreateAtlasTexture`, `UploadAtlasTextureRect`, `FlushAtlasTexture`, `FlushAtlasTextureUpdates`, `BindAtlasTexture`, `ReleaseAtlasTexture`, `GetAtlasTextureStats` |
 | Legacy L1 | `Handshake`, `SetAtlasPageMaterial`, `SetBlockDefs`, `SetLightDefs`, `CreateChunk`, `ApplyChunk`, `SetCellsBatch`, `SetCell`, `Think`, `DrawChunk`, `DrawVisible`, lighting rebuilds, light atlases, compressed-patch decoding, and `Debug*` and others |
 | Removed | `DrawL2MeshPixels`, `DrawL2Relight`, `DrawL2AtlasPixels` retain their names but always return error `l2_pixel_rectangles_removed_restart_with_current_lua` |
+
+`GetL2PixelTextureLimits()` queries the active Source hardware configuration on the Lua/render thread
+and returns `{ maxWidth, maxHeight }` or `nil, error`. Creation uses the same limits.
+Missing hardware configuration, invalid limits, and unsupported dimensions have distinct errors.
+The client resolves `mc_light_atlas_size` once per connection; see [lighting atlas resolution](../docs-user/06-shader-packs.md#lighting-atlas-resolution).
 
 Lua checks compatibility at three levels:
 

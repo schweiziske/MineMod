@@ -1,0 +1,153 @@
+{
+  "schema": 1,
+  "phase": "offline_candidate",
+  "gpuReady": false,
+  "build": "67ce79943a0d255131a666cc5aac17a5d496b632cfa4b4a75458df38b8666cb9",
+  "experimentalGPUAnimation": false,
+  "maxPixelInstructionSlots": 564,
+  "binding": {
+    "id": "mc:vanilla_quad_v2",
+    "revision": 2,
+    "gpuReady": false,
+    "material": "screenspace_general_8tex",
+    "atlasSizes": [
+      16384,
+      8192,
+      4096
+    ],
+    "cornerAtlasVersion": 1,
+    "lightmapSize": 16,
+    "verticesPerQuad": 4,
+    "vertexPayload": "COLOR0.rgb=localQuad*4+corner little-endian bytes; COLOR0.a=opacity",
+    "atlasPayload": "RGBA8=smoothBlockByte,smoothSkyByte,preTintShadeByte,tintCode",
+    "colorPolicy": "reference UNORM multiplication; no automatic sRGB reads or writes",
+    "dynamicLights": "Optional local-light draw after each affected mesh. Shared 64x1 RGBA8 data, five texels per light, at most eight; c0=inverseBlockSize,cornerLayout,opacity,count; cornerLayout=bank+64*(16384/atlasSize-1); c1=render-space eye. All local-light materials test depth without writes.",
+    "samplers": [
+      {
+        "symbol": "MCAlbedo",
+        "slot": 0,
+        "materialKey": "$basetexture",
+        "filter": "point",
+        "encoding": "unorm"
+      },
+      {
+        "symbol": "MCQuadVertices",
+        "slot": 1,
+        "materialKey": "$texture1",
+        "filter": "point",
+        "encoding": "raw_rgba8"
+      },
+      {
+        "symbol": "MCGlobalLightmap",
+        "slot": 2,
+        "materialKey": "$texture2",
+        "filter": "linear",
+        "encoding": "unorm"
+      }
+    ],
+    "constants": [
+      {
+        "symbol": "MCModelViewProjection",
+        "stage": "vertex",
+        "slot": 4,
+        "type": "float4x4",
+        "registers": 4,
+        "source": "engine model-view-projection"
+      },
+      {
+        "symbol": "MCQuadParams",
+        "stage": "pixel",
+        "slot": 0,
+        "type": "float4",
+        "registers": 1,
+        "source": "x=reserved inverseBlockSize; y=reserved; z=bank+64*(16384/atlasSize-1); w=cutoff"
+      }
+    ]
+  },
+  "programs": {
+    "sampling_vertex": {
+      "name": "mc_vanilla_sampling_vertex_67ce79943a0d255131a6_vs30",
+      "sha256": "9543c792327195519c05947bdc3c0ab1f3419c27d66fafad81a01bf9f84f6a68",
+      "bytes": 198,
+      "profile": "vs_3_0",
+      "instructionHash": "b211977ec1572ea733a34e4d6637a1f7bf73f8e163b9ef75ae2bcba5b457f28b"
+    },
+    "sampling": {
+      "name": "mc_vanilla_sampling_67ce79943a0d255131a6_ps30",
+      "sha256": "58f05031b293593d85734d5f6d1069e8456e9c74e1c6712478dff383439e11ce",
+      "bytes": 349,
+      "profile": "ps_3_0",
+      "instructionHash": "373d49bae6c9a52e193191b9f11c382e69311dc1ce72e52289f789bbe0228d39"
+    },
+    "vertex": {
+      "name": "mc_vanilla_vertex_67ce79943a0d255131a6_vs30",
+      "sha256": "13e167c3add0ec99f721b4c9dab3e4c002a30ee79bafbe5f4c7762a73fccacfe",
+      "bytes": 467,
+      "profile": "vs_3_0",
+      "instructionHash": "25cfabe2dcea51143c5b1eea21a6f67cb8fa31820b267b30fa2b544f1fcd427e"
+    },
+    "opaque": {
+      "name": "mc_vanilla_opaque_67ce79943a0d255131a6_ps30",
+      "sha256": "f6b1ab8feb1c5a6dc0baa2054934609f265acff5a1e590a067429105ef19b0b6",
+      "bytes": 2130,
+      "profile": "ps_3_0",
+      "instructionHash": "3b419c1f5196a6d4fbff338e996f0041c8ca5f700472d9255e5677d7032a3ed4"
+    },
+    "cutout": {
+      "name": "mc_vanilla_cutout_67ce79943a0d255131a6_ps30",
+      "sha256": "b12d51b940e25457951ab5ab8440e554c985568fa17325f50ffe6b7e3f54f301",
+      "bytes": 2180,
+      "profile": "ps_3_0",
+      "instructionHash": "3b2b2cf5f6f49cad2b1d2c7f100ac08bd3049367a520c97375d953797e0af0d5"
+    },
+    "translucent": {
+      "name": "mc_vanilla_translucent_67ce79943a0d255131a6_ps30",
+      "sha256": "403a79bec666aeba80ac69a56c3175a2334a1edd9d3b230da71e4e0922a05b15",
+      "bytes": 2137,
+      "profile": "ps_3_0",
+      "instructionHash": "70edb9c4957caab3af729cafb35bd6f9dc94e15217ab07e254a846068fd8e54a"
+    },
+    "dynamic_vertex": {
+      "name": "mc_vanilla_dynamic_vertex_67ce79943a0d255131a6_vs30",
+      "sha256": "473b1270d2910fc9f72af7ff51c641ec3fc3e0c06a799887d554d18f7175be5d",
+      "bytes": 482,
+      "profile": "vs_3_0",
+      "instructionHash": "d786acea5bb0c2bf58bde662a918e0bf3d45b10561a6f37c8b09352876536805"
+    },
+    "dynamic_opaque": {
+      "name": "mc_vanilla_dynamic_opaque_67ce79943a0d255131a6_ps30",
+      "sha256": "b61472a47ea679848036283992ee5e53e50d9d0cdce7795956d1415b312c9bdb",
+      "bytes": 2502,
+      "profile": "ps_3_0",
+      "instructionHash": "390e66bb69ecb56719d63fd8ec03e9a30c68ab3f9dd6df548d65a7f40a4e97aa"
+    },
+    "dynamic_cutout": {
+      "name": "mc_vanilla_dynamic_cutout_67ce79943a0d255131a6_ps30",
+      "sha256": "8c3b7239cbfc7d1bc5dfdade55327d5417acb82480a171bcefeb833b36561ad9",
+      "bytes": 2514,
+      "profile": "ps_3_0",
+      "instructionHash": "6066dc9250141602f88ffa012a03297f08c063deaf51c6645a55817820db5b6e"
+    },
+    "dynamic_translucent": {
+      "name": "mc_vanilla_dynamic_translucent_67ce79943a0d255131a6_ps30",
+      "sha256": "5e54e5d307dd837cbd8a8385cc75bc396d49fb664137d98abdebb7a26350b78b",
+      "bytes": 2481,
+      "profile": "ps_3_0",
+      "instructionHash": "f0d0bbe2edff9ade7b75e8ef68a24b9d3be6d68130bf323c22aaec58240cf89f"
+    },
+    "dynamic_sprite_vertex": {
+      "name": "mc_vanilla_dynamic_sprite_vertex_67ce79943a0d255131a6_vs30",
+      "sha256": "49a7f8113c7b2c4ba34ffd8472454317fd73ded5d100ed6a76f991a66fe225a6",
+      "bytes": 339,
+      "profile": "vs_3_0",
+      "instructionHash": "5c1bc768904e950d8c83966b26cf79fff5de332ef02fedbac2d1f681ef6a7160"
+    },
+    "dynamic_sprite": {
+      "name": "mc_vanilla_dynamic_sprite_67ce79943a0d255131a6_ps30",
+      "sha256": "55d249aeeda85a50e3f9155c02047eaa8f4e013e767b71f8afaf401f94f01564",
+      "bytes": 2026,
+      "profile": "ps_3_0",
+      "instructionHash": "1cfb60c4f087a75e336bf4ee9a3eb480785ec71a5638d78dfb9ef2b3fb60b642"
+    }
+  }
+}

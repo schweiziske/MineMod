@@ -3,13 +3,20 @@ MC = MC or {}
 local R = MC.RenderL2Resources or { materials = {} }
 MC.RenderL2Resources = R
 local floor = math.floor
-local ATLAS_SIZE, LIGHTMAP_SIZE = 16384, 16
-local ATLAS_HEIGHT = 16384
+local layout = MC.RenderAtlasLayout
+-- Unavailable layouts expose no capacity; creation reports the original failure.
+local ATLAS_SIZE, LIGHTMAP_SIZE = layout.active and layout.active.size or 0, 16
+local ATLAS_HEIGHT = ATLAS_SIZE
 R.ATLAS_SIZE, R.ATLAS_HEIGHT = ATLAS_SIZE, ATLAS_HEIGHT
 R.CAPACITY = ATLAS_SIZE * math.floor( ATLAS_HEIGHT / 5 )
 -- Native meshes retain their existing 24-bit corner payload within each bank.
 -- The material supplies the bank, avoiding a per-vertex ABI/DLL change.
 R.BANK_QUADS = 1048576
+-- Banks fit in the low six bits; the upper part carries the physical row scale.
+local atlasLayoutCode = ATLAS_SIZE > 0 and ( 16384 / ATLAS_SIZE - 1 ) * 64 or 0
+function R.AtlasParameter( bank )
+	return ( bank or 0 ) + atlasLayoutCode
+end
 R.OCCLUSION_VERSION = 1
 local DEPTH_MATERIAL_VERSION = 2
 
@@ -47,11 +54,14 @@ end
 local requireValue = R.Require
 
 function R.ValidateBuild()
+	requireValue( layout.active, "l2_atlas_layout", layout.error )
 	local catalog = MC.RenderPackRegistry
 	requireValue( catalog and catalog.Get and catalog.Revision, "l2_visual_catalog", "render pack catalog is unavailable" )
 	local build, err = catalog.Get( "pack", "mc:vanilla" )
 	requireValue( type( build ) == "table" and build.schema == 1,
 		"l2_visual_manifest", "mc:vanilla JSON descriptor is unavailable; run mc_render_pack scan: " .. tostring( err ) )
+	requireValue( ATLAS_SIZE == 16384 or build.cornerAtlasVersion == 1,
+		"l2_visual_atlas_layout", "update mc_shaderpack_vanilla for 8K/4K corner atlases" )
 	requireValue( type( build.build ) == "string" and #build.build == 64
 		and not build.build:find( "[^0-9a-f]" ), "l2_visual_fingerprint", "invalid candidate fingerprint" )
 	requireValue( not R.build or R.build == build.build, "l2_visual_build_changed",
@@ -124,7 +134,7 @@ local function ensureUploadMaterial()
 end
 
 -- Only the tiny, frequently rewritten light tables use queued RT writes. The
--- 16K corner/AO atlas stays procedural and never enters the queue vertex pool.
+-- Corner/AO atlas stays procedural and never enters the queue vertex pool.
 local function createQueuedLightTexture( name, width, height, point, initialPixels )
 	requireValue( width * height <= 256 and GetRenderTargetEx and mesh and mesh.Begin
 		and mesh.Color and mesh.Position and mesh.TexCoord and mesh.AdvanceVertex and mesh.End
@@ -367,6 +377,7 @@ ensureQueuedLightmap = function( owner )
 end
 
 function R.Ensure( build, owner )
+	requireValue( layout.active, "l2_atlas_layout", layout.error )
 	owner = owner or R
 	R.drawPixels = nil
 	if mcmesh and mcmesh.L2PixelTextureVersion then
@@ -374,6 +385,8 @@ function R.Ensure( build, owner )
 		requireValue( not owner.atlas or R.pixelTextures[owner.atlas:GetName()],
 			"l2_pixel_texture_restart", "restart to replace the old render-target light atlas" )
 		if not owner.atlas then owner.atlas = R.CreatePixelTexture( ATLAS_SIZE, ATLAS_HEIGHT, true ) end
+		requireValue( owner.atlas:Width() == ATLAS_SIZE and owner.atlas:Height() == ATLAS_HEIGHT,
+			"l2_atlas_layout_restart", "reconnect to replace the retained corner/AO atlas layout" )
 		ensureQueuedLightmap( owner )
 		return
 	end
@@ -388,11 +401,11 @@ function R.Ensure( build, owner )
 	owner.build = build.build
 	local prefix = owner.prefix or "mc_l2_visual"
 	if not owner.atlas then
-		owner.atlas = GetRenderTargetEx( prefix .. "_quad_ao16k_v1", ATLAS_SIZE, ATLAS_HEIGHT,
+		owner.atlas = GetRenderTargetEx( prefix .. "_quad_ao_" .. ATLAS_SIZE .. "_v2", ATLAS_SIZE, ATLAS_HEIGHT,
 			RT_SIZE_LITERAL, MATERIAL_RT_DEPTH_NONE, bit.bor( 1, 4, 8, 256, 512 ), 0, IMAGE_FORMAT_RGBA8888 )
 	end
 	requireValue( owner.atlas and not owner.atlas:IsError() and owner.atlas:Width() == ATLAS_SIZE and owner.atlas:Height() == ATLAS_HEIGHT,
-		"l2_visual_atlas", "16384x16384 point-filter corner/AO atlas required; restart clients retaining the old atlas" )
+		"l2_visual_atlas", ATLAS_SIZE .. "x" .. ATLAS_HEIGHT .. " point-filter corner/AO atlas required; reconnect to replace retained resources" )
 	ensureQueuedLightmap( owner )
 end
 
@@ -416,7 +429,7 @@ function R.BoundMaterial( owner, slot, source, stage, blockSize, program, colorS
 				and not MC.ResourceGeneration.textures[source:GetName()] and 0 or 1, ["$linearread_texture1"] = 1,
 			["$linearread_texture2"] = 1, ["$linearwrite"] = 1,
 			["$c0_x"] = tostring( 1 / blockSize ), ["$c0_y"] = "0",
-			["$c0_z"] = tostring( atlasBank or 0 ), ["$c0_w"] = "0.5",
+			["$c0_z"] = tostring( R.AtlasParameter( atlasBank ) ), ["$c0_w"] = "0.5",
 		}
 		if stage == "world_translucent" then
 			params["$alphablend"], params["$translucent"] = 1, 1

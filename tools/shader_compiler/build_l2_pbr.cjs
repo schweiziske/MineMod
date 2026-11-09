@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 const { fingerprint, compilerSources, filelistEntry, immutableWrite, compileModern } = require("./build_l2_vanilla.cjs");
 const { constantPNG, publishedResources: engineResources } = require("./build_engine_render_textures.cjs");
 const { withDisplay } = require("./descriptor_display.cjs");
+const { pruneOldShaders } = require("./shader_cleanup.cjs");
 const ROOT = path.resolve(__dirname, "../..");
 const ADDON = path.join(ROOT, "addons/mc_shaderpack_pbr");
 const DESCRIPTOR = path.join(ADDON, "data_static/mc/shaderpacks/mc_pbr.json");
@@ -154,17 +155,11 @@ function publishSettings() {
   console.log("Published PBR settings and display keys; shader programs and pipeline unchanged");
 }
 
-// Delete .vcs files of earlier builds; the new descriptor must already be published.
-function pruneOldShaders() {
-  const { programs } = JSON.parse(fs.readFileSync(DESCRIPTOR, "utf8")).definition;
-  const keep = new Set(Object.values(programs).flatMap(p => [p.vertex + ".vcs", p.pixel + ".vcs"]));
-  const directory = path.join(ADDON, "shaders/fxc");
-  const old = fs.readdirSync(directory).filter(name => name.startsWith("mc_pbr_") && !keep.has(name));
-  for (const name of old) fs.unlinkSync(path.join(directory, name));
-  console.log(`Removed ${old.length} old shader files`);
-}
-
 function main(argv) {
+  if (argv.length === 1 && argv[0] === "--prune-only") {
+    pruneOldShaders(ADDON, DESCRIPTOR, "mc_pbr_");
+    return;
+  }
   if (argv.length === 1 && argv[0] === "--resources-only") return publishEngineResources();
   if (argv.length === 1 && argv[0] === "--settings-only") return publishSettings();
   const options = { toolchain: path.join(__dirname, "toolchain"),
@@ -238,7 +233,8 @@ function main(argv) {
   // never renames the compiled programs. The client validates the schema.
   const settings = JSON.parse(fs.readFileSync(SETTINGS, "utf8"));
   const definition = withDisplay("mc:pbr", { schema: 1, build: digest, abi: 1,
-    layout: "mc:quad_corners_v1", adapter: contract.id, programs: {}, resources, passes: {},
+    layout: "mc:quad_corners_v1", adapter: contract.id, cornerAtlasVersion: contract.cornerAtlasVersion,
+    programs: {}, resources, passes: {},
     materialMaps, settingGroups: settings.groups, settings: settings.settings,
     presets: settings.presets, defaultPreset: settings.defaultPreset,
     implements: { "mc:terrain": { contract: 1, passes: ["terrain_opaque", "terrain_cutout", "terrain_translucent"] } } });
@@ -350,7 +346,7 @@ function main(argv) {
   stampDefinition(definition);
   atomicWrite(DESCRIPTOR, JSON.stringify({ schema: 1, kind: "pack", id: "mc:pbr", definition }, null, 2).replace(/\n/g, "\r\n") + "\r\n");
   console.log(`Published ${output.length} validated SM3 programs and data maps\nDescriptor: ${DESCRIPTOR}`);
-  pruneOldShaders();
+  pruneOldShaders(ADDON, DESCRIPTOR, "mc_pbr_");
 }
 
 module.exports = { constantPNG, validateReport };

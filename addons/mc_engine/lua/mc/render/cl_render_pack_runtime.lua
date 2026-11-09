@@ -776,6 +776,11 @@ local function printStatus()
 	local light = s.lightTextures
 	print( string.format( "[MC light textures] version=%d lightmap=%s dynamic=%s migrations=%d",
 		light.version, light.lightmap, light.dynamic, light.migrations ) )
+	local layout = MC.RenderAtlasLayout.active
+	print( string.format( "[MC corner atlas] saved=%s active=%dx%d maximum=%s capacity=%d sessionChoice=%s",
+		MC.LightAtlasSize:GetString(), R.ATLAS_SIZE, R.ATLAS_HEIGHT,
+		layout and ( layout.maxWidth .. "x" .. layout.maxHeight ) or "unavailable", R.CAPACITY,
+		layout and layout.preference or "unavailable" ) )
 	if s.lastError then print( "[MC render pack] lastError=" .. s.lastError ) end
 end
 

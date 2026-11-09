@@ -4,6 +4,7 @@ MC.ResourcePacks = MC.ResourcePacks or {}
 local R = MC.ResourcePacks
 R.jobs, R.serial = R.jobs or {}, R.serial or 0
 local HOOK = "mc_resource_pack_apply"
+local PRESENTATION_INTERVAL = 0.5
 
 function R.ListPacks()
 	local entries, byName = MC.ListTexturePacks(), {}
@@ -166,7 +167,7 @@ local function applyRaw(job)
 	if MC.TexturePackLeaseOwner() then return nil, "texture_pack_controlled_by_mode" end
 	if MC.TexturePack:GetString() ~= job.preference then return nil, "texture_pack_selection_changed" end
 	local before = SysTime()
-	local nextPresentation=before+5
+	local nextPresentation=before+PRESENTATION_INTERVAL
 	local function checkpoint(phase,completed,total)
 		if completed then job.phase,job.completed,job.total=phase,completed,total end
 		if SysTime()<nextPresentation then return end
@@ -177,7 +178,7 @@ local function applyRaw(job)
 		-- resume, before touching or publishing any candidate textures.
 		if job.cancelRequested or MC.TexturePackLeaseOwner() or MC.TexturePack:GetString()~=job.preference
 			or MC.ResourceRepository.revision~=job.catalogRevision then error("resource_apply_cancelled",0) end
-		nextPresentation=SysTime()+5
+		nextPresentation=SysTime()+PRESENTATION_INTERVAL
 	end
 	local plan, reason = MC.ResourceCompiler.PrepareTiles(job.selection, job.catalogRevision, job.options, checkpoint)
 	if not plan then return nil, reason end
@@ -411,7 +412,7 @@ hook.Add( "MC.AtlasBakeChanged", HOOK, function( status )
 	elseif status.state == "cancelled" then finish( job, "cancelled", "atlas_bake_cancelled" ) end
 end )
 
--- Run continuously, allowing one presentation frame only after five seconds
+-- Run continuously, allowing one presentation frame after half a second
 -- of work. Geometry retains its own scheduler and commit boundary.
 hook.Add("PostRender", HOOK, function()
 	local job = R.job

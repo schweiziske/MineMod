@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const { withDisplay } = require("./descriptor_display.cjs");
+const { pruneOldShaders } = require("./shader_cleanup.cjs");
 const ROOT = path.resolve(__dirname, "../..");
 const SOURCE = path.join(__dirname, "shadersrc/l2/vanilla");
 const ADDON = path.join(ROOT, "addons/mc_shaderpack_vanilla");
@@ -73,7 +74,8 @@ function compilerSources(entries) {
 function bindingHeader(contract) {
   if (!((contract.id === "mc:vanilla_quad_draft" && contract.revision === 1)
       || (contract.id === "mc:vanilla_quad_v2" && contract.revision === 2)) || contract.gpuReady !== false
-      || contract.atlasSize !== 16384 || contract.lightmapSize !== 16 || contract.verticesPerQuad !== 4
+      || JSON.stringify(contract.atlasSizes) !== "[16384,8192,4096]" || contract.cornerAtlasVersion !== 1
+      || contract.lightmapSize !== 16 || contract.verticesPerQuad !== 4
       || contract.material !== "screenspace_general_8tex") throw new Error("Unsupported draft contract");
   const occupied = new Set();
   const symbols = new Set();
@@ -200,7 +202,7 @@ function packDefinition(manifest) {
   }
   return withDisplay("mc:vanilla", {
     schema: 1, build: manifest.build, abi: 1,
-    layout: "mc:quad_corners_v1", adapter: manifest.binding.id,
+    layout: "mc:quad_corners_v1", adapter: manifest.binding.id, cornerAtlasVersion: manifest.binding.cornerAtlasVersion,
     programs, resources: {}, passes,
     implements: { "mc:terrain": { contract: 1,
       passes: ["terrain_opaque", "terrain_cutout", "terrain_translucent"] } },
@@ -237,6 +239,7 @@ function writeDescriptor(document) {
 function publishDescriptor(manifest) {
   validatePublishedBuild(manifest);
   writeDescriptor(descriptorDocument(manifest));
+  pruneOldShaders(ADDON, DESCRIPTOR, "mc_vanilla_");
 }
 
 // Display keys are no build input: refresh them in the published descriptor
@@ -248,6 +251,10 @@ function publishDisplay() {
 }
 
 function main(argv) {
+  if (argv.length === 1 && argv[0] === "--prune-only") {
+    pruneOldShaders(ADDON, DESCRIPTOR, "mc_vanilla_");
+    return;
+  }
   if (argv.length === 1 && argv[0] === "--display-only") {
     publishDisplay();
     console.log(`Published display keys; programs and build unchanged\nDescriptor: ${DESCRIPTOR}`);

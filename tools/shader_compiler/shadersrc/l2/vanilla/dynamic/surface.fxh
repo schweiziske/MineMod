@@ -6,7 +6,7 @@
 #ifndef MC_RESOURCE_PBR_SPRITE
 #include "../lighting/water_fog.fxh"
 #endif
-float4 MCDynamicParams : register(c0); // inverse block size, first quad, opacity, count
+float4 MCDynamicParams : register(c0); // inverse block size, corner layout/bank, opacity, count
 float4 MCDynamicEye : register(c1); // render-space eye, unused
 sampler2D MCAlbedo : register(s0);
 sampler2D MCQuadVertices : register(s1);
@@ -43,12 +43,12 @@ float4 main(MCDynamicFragment input, float faceSign : VFACE) : COLOR0
 #if !MC_ALPHA_TRANSLUCENT
     clip(faceSign);
 #endif
-    float2 pixel = mcCornerAtlasPixel(input.quadAddressOpacity.xy, MCDynamicParams.y);
+    float4 pixel = mcCornerAtlasPixel(input.quadAddressOpacity.xy, MCDynamicParams.y);
     float2 uv = mcCornerAtlasUV(pixel);
     float3 tint = mcDynamicTint(uv) * input.weights.x
-        + mcDynamicTint(uv + float2(1.0f / 16384.0f, 0)) * input.weights.y
-        + mcDynamicTint(uv + float2(2.0f / 16384.0f, 0)) * input.weights.z
-        + mcDynamicTint(uv + float2(3.0f / 16384.0f, 0)) * input.weights.w;
+        + mcDynamicTint(uv + float2(pixel.z, 0)) * input.weights.y
+        + mcDynamicTint(uv + float2(2.0f * pixel.z, 0)) * input.weights.z
+        + mcDynamicTint(uv + float2(3.0f * pixel.z, 0)) * input.weights.w;
 #endif
     float3 position = (input.worldPosition - MCDynamicEye.xyz) * MCDynamicParams.x;
     float3 light = 0;

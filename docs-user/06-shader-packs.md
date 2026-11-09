@@ -21,6 +21,24 @@ PBR includes **Minimum, Low, Medium, High, Full** presets, with **High** as defa
 
 Manual changes display **Custom**. **Save as** stores a user preset; built-in presets are read-only. The eye button in the title bar temporarily hides the window for inspecting the scene.
 
+## Lighting atlas resolution
+
+Open `mc_config` and select **Client settings → Rendering → Display → Lighting atlas resolution**.
+The saved choices are **Auto** (default), **16K**, **8K**, and **4K**. Only Auto selects the largest
+supported tier using both device width and height limits; it remains saved and displayed as Auto.
+Manual choices are exact sizes, not upper bounds. Unsupported choices are rejected by the settings
+page. Reconnect after changing the setting; existing meshes retain their session's layout.
+
+The equivalent ConVar is `mc_light_atlas_size auto|16384|8192|4096`. It is a client setting shared by
+shader packs, separate from pack presets. Smaller atlases reduce available quad slots, not per-quad
+lighting precision. A single RGBA8 atlas without mipmaps contains 1 GiB, 256 MiB, or 64 MiB at these
+three sizes; CPU backing and engine temporary memory are additional. Exhausted quad capacity reports
+`render_pack_atlas_budget`; live slots are never overwritten.
+
+8K/4K require matching shader packs. `l2_texture_device_limit` reports unsupported dimensions;
+`l2_texture_hardware_config_unavailable` is a separate Native interface failure and is not fixed by
+reducing the size. Native installations also require `GetL2PixelTextureLimits` in the installed DLL.
+
 ## Console commands
 
 Run these in your client console:

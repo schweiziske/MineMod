@@ -15,9 +15,9 @@ float3 mcLitVertex(float2 uv)
 
 float3 mcQuadLighting(MCQuadFragment input)
 {
-    float2 pixel = mcCornerAtlasPixel(input.quadAddressOpacity.xy, MCQuadParams.z);
+    float4 pixel = mcCornerAtlasPixel(input.quadAddressOpacity.xy, MCQuadParams.z);
     float2 uv = mcCornerAtlasUV(pixel);
-    float2 stepX = float2(1.0f / 16384.0f, 0.0f);
+    float2 stepX = float2(pixel.z, 0.0f);
     // Nonlinear lightmap lookup precedes interpolation; black is valid data.
     return mcLitVertex(uv) * input.weights.x
          + mcLitVertex(uv + stepX) * input.weights.y

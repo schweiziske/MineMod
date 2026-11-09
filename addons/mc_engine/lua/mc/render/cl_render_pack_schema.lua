@@ -536,10 +536,11 @@ end
 
 local function validate( def )
 	fields( def, { schema = true, nameKey = true, descriptionKey = true, build = true, abi = true,
-		layout = true, adapter = true, programs = true, resources = true, pipeline = true,
+		layout = true, adapter = true, cornerAtlasVersion = true, programs = true, resources = true, pipeline = true,
 		passes = true, implements = true, materialMaps = true, settings = true, settingGroups = true,
 		presets = true, defaultPreset = true }, "definition" )
 	if def.schema ~= Schema.VERSION then reject( "unsupported_descriptor_schema" ) end
+	if def.cornerAtlasVersion ~= nil and def.cornerAtlasVersion ~= 1 then reject( "unsupported_corner_atlas_version" ) end
 	if not textKey( def.nameKey, true ) or not textKey( def.descriptionKey ) then reject( "invalid_name_key" ) end
 	if not hash( def.build ) then reject( "invalid_build_fingerprint" ) end
 	if not positiveInteger( def.abi ) or not Schema.IsID( def.layout )

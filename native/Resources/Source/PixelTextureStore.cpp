@@ -65,17 +65,29 @@ PixelTexture &PixelTextureStore::Find(PixelTextureId inId) const
 	return *found->second;
 }
 
-PixelTextureStats PixelTextureStore::Create(int inWidth, int inHeight, bool inPointSample)
+PixelTextureDimensions PixelTextureStore::GetDeviceLimits() const
 {
 	auto *material_system = source::GetMaterialSystem();
 	if (!material_system)
-		throw std::runtime_error("l2_texture_create_arguments");
-	if (inWidth < 1 || inWidth > 16384 || inHeight < 1 || inHeight > 16384)
-		throw std::runtime_error("l2_texture_range");
+		throw std::runtime_error("l2_texture_materialsystem_unavailable");
 	int	  code = 0;
 	auto *hardware = material_system->GetHardwareConfig(MATERIALSYSTEM_HARDWARECONFIG_INTERFACE_VERSION, &code);
-	if (!hardware || inWidth > hardware->MaxTextureWidth() || inHeight > hardware->MaxTextureHeight())
-		throw std::runtime_error("l2_texture_device_limit");
+	if (!hardware)
+		throw std::runtime_error("l2_texture_hardware_config_unavailable: code=" + std::to_string(code));
+	const PixelTextureDimensions limits{hardware->MaxTextureWidth(), hardware->MaxTextureHeight()};
+	if (limits.mWidth < 1 || limits.mHeight < 1)
+		throw std::runtime_error("l2_texture_device_limits_invalid: " + std::to_string(limits.mWidth) + "x" + std::to_string(limits.mHeight));
+	return limits;
+}
+
+PixelTextureStats PixelTextureStore::Create(int inWidth, int inHeight, bool inPointSample)
+{
+	if (inWidth < 1 || inWidth > 16384 || inHeight < 1 || inHeight > 16384)
+		throw std::runtime_error("l2_texture_range");
+	const auto limits = GetDeviceLimits();
+	if (inWidth > limits.mWidth || inHeight > limits.mHeight)
+		throw std::runtime_error("l2_texture_device_limit: requested=" + std::to_string(inWidth) + "x" + std::to_string(inHeight)
+								+ " maximum=" + std::to_string(limits.mWidth) + "x" + std::to_string(limits.mHeight));
 	if (mSequence == cMaxPixelTextureId)
 		throw std::runtime_error("l2_texture_handle_exhausted");
 

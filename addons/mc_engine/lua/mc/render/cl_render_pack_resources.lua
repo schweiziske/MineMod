@@ -19,6 +19,7 @@ local function sortedKeys( values )
 end
 
 function P.Validate( plan )
+	requireValue( MC.RenderAtlasLayout.active, "l2_atlas_layout", MC.RenderAtlasLayout.error )
 	requireValue( file and file.Read and util and util.SHA256,
 		"render_pack_verify_api", "mounted-file reads and SHA256 are required" )
 	local result = { plan = plan, nodes = {}, requests = {}, sources = {}, files = {}, textures = {}, materialMaps = {}, runtimePBR = {},
@@ -45,6 +46,8 @@ function P.Validate( plan )
 		local owner = plan.owners[ownerKey]
 		local def = owner.definition
 		local sky = def.adapter == "mc:sky_quad_v1"
+		requireValue( sky or R.ATLAS_SIZE == 16384 or def.cornerAtlasVersion == 1,
+			"render_pack_atlas_layout", ownerKey .. ": shader pack requires an update for 8K/4K corner atlases" )
 		local moving = def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5" or def.adapter == "mc:vanilla_quad_v2"
 		local independentAO = def.adapter == "mc:pbr_quad_v3" or def.adapter == "mc:pbr_quad_v4" or def.adapter == "mc:pbr_quad_v5"
 		local ibl = independentAO or def.adapter == "mc:pbr_quad_v2"

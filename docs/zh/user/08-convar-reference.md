@@ -31,6 +31,7 @@ mc_language zh_cn
 | `mc_item_drop_draw_distance` | `96` | 掉落物绘制距离，单位为方块 |
 | `mc_mesh_render` | `1` | 显示世界网格，关闭仍保留碰撞 |
 | `mc_mesh_draw_distance` | `0` | 绘制距离，Source 单位；0 在延迟构建开启时使用其距离，否则不限 |
+| `mc_light_atlas_size` | `auto` | 光照图集：自动（支持的最大档位）、`16384`、`8192`、`4096`；手动尺寸必须受设备支持，重新连接后生效 |
 | `mc_mesh_build_preset` | `fast` | 构建调度：smooth、fast、loading；手动改预算后为 custom |
 | `mc_client_collision` | `1` | 本地预测碰撞 |
 | `mc_dynamic_lights` | `1` | 动态光源 |

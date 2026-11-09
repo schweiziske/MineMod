@@ -3,6 +3,9 @@ MC = MC or {}
 MC.RenderMesh = MC.RenderMesh or {}
 local RM = MC.RenderMesh
 
+MC.LightAtlasSize = MC.LightAtlasSize or CreateClientConVar( "mc_light_atlas_size", "auto", true, false,
+	"L2 corner/AO atlas size: auto, 16384, 8192, or 4096. Reconnect after changing." )
+
 MC.MeshEmitProbe = MC.MeshEmitProbe or ( CreateClientConVar and CreateClientConVar( "mc_mesh_emit_probe", "0", true, false,
 	"Print detailed MC mesh emit timings for diagnosing full geometry rebuild hot paths" ) )
 MC.MeshBeginUpload = MC.MeshBeginUpload or ( CreateClientConVar and CreateClientConVar( "mc_mesh_begin_upload", "1", true, false,

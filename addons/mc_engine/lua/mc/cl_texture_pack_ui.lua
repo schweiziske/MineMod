@@ -14,7 +14,7 @@ local PAGE_SIZE = 32
 local EVENTS = { "MC.TexturePackChanged", "MC.TexturePackRegistered", "MC.TexturePackUnregistered",
 	"MC.TexturePackOwnerUnregistered", "MC.TexturePackLeaseChanged", "MC.TexturePackSourcesChanged", "MC.ResourcePackApplyChanged", "MC.ResourcePackCatalogChanged" }
 
--- One immutable presentation snapshot per five-second bake checkpoint. Paint
+-- One immutable presentation snapshot per half-second bake checkpoint. Paint
 -- only draws it; it never advances work, invents progress or polls the compiler.
 local bakeProgress
 hook.Add("MC.ResourcePackApplyChanged","mc_texture_pack_progress",function(status)

@@ -301,6 +301,7 @@ All entries are registered on the client. Legacy chunk-shader, Fancy, and custom
 | `mc_light_style` | `vanilla` | Client | Deprecated appearance selector; does not select the current shader pack |
 | `mc_light_sun_brightness` | `1` | Client | Sun/skylight brightness multiplier |
 | `mc_light_texture` | `1` | Client | Legacy GPU path samples chunk-light textures instead of baked vertex colors |
+| `mc_light_atlas_size` | `auto` | Client | L2 corner/AO atlas: `auto` selects the largest supported tier; `16384`, `8192`, `4096` select exact supported sizes; reconnect to apply |
 | `mc_lightmap` | `1` | Client | 16×16 global lightmap: warm block light and day/night sky colors; 0 grayscale fallback |
 | `mc_lightmap_ambient` | `0.18` | Client | Minimum visible brightness in fully dark global-lightmap regions |
 | `mc_lightmap_eye_dark` | `1` | Client | Ambient multiplier when the camera cell has no skylight; 1 no darkening |

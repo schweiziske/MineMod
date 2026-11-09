@@ -20,6 +20,7 @@ _tools/hlsl_shader_lab/dx9_smoke_test.log
 _tools/hlsl_shader_lab/mcbr_preview.png
 _tools/hlsl_shader_lab/mcbr_preview_base_only.png
 _tools/texture_size_test
+_bugs
 test_lightatlas_sampling.obj
 addon.json
 !addons/mc_engine/addon.json

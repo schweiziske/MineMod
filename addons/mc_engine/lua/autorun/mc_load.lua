@@ -189,6 +189,7 @@ local CLIENT_FILES = {
 	"mc/render/cl_render_l2_snapshot.lua",
 	"mc/render/cl_render_l2_lighting.lua",
 	"mc/render/cl_render_l2_quad.lua",
+	"mc/render/cl_render_atlas_layout.lua",
 	"mc/render/cl_render_l2_resources.lua",
 	"mc/render/cl_render_vanilla_water.lua",
 	"mc/render/cl_render_sky.lua",

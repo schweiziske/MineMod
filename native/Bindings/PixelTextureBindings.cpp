@@ -103,6 +103,15 @@ int Guard(ILuaBase *inLua, LuaOperation inFunction)
 		return Fail(inLua, error.what());
 	}
 }
+int PushDeviceLimits(ILuaBase *inLua)
+{
+	const auto limits = pixelupload::GetPixelTextureStore().GetDeviceLimits();
+	inLua->CreateTable();
+	SetNumber(inLua, "maxWidth", limits.mWidth);
+	SetNumber(inLua, "maxHeight", limits.mHeight);
+	return 1;
+}
+
 int CreateTexture(ILuaBase *inLua)
 {
 	const int width = int(ReadNumber(inLua, 1, 1, 16384));
@@ -207,6 +216,11 @@ int DeviceRevision(ILuaBase *inLua)
 {
 	inLua->PushNumber(source::GetRenderDeviceRevision());
 	return 1;
+}
+
+int DeviceLimits(ILuaBase *inLua)
+{
+	return Guard(inLua, PushDeviceLimits);
 }
 
 int Bind(ILuaBase *inLua)

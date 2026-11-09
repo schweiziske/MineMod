@@ -170,6 +170,11 @@ MC.ConfigConVars = {
 
 		category( "display", "rendering", {
 			item( "mc_mesh_render", "bool" ),
+			item( "mc_light_atlas_size", "choice", { choices = {
+					choice( "auto" ), choice( "16384" ), choice( "8192" ), choice( "4096" ),
+				},
+				set = function( value ) return MC.RenderAtlasLayout.SetPreference( value ) end,
+			} ),
 			item( "mc_mesh_cull_mode", "choice", { choices = {
 					choice( "ccw" ),
 					choice( "cw" ),
