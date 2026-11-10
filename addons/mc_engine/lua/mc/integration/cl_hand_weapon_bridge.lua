@@ -105,18 +105,27 @@ local function selectedResolvesTo( ply, className )
 	return resolved == className
 end
 
+local function managedSwitchPending( ply )
+	local targetClass = transitionTarget( ply )
+	if not targetClass then return false end
+	if targetClass == Bridge.HandClass or targetClass == Bridge.InventoryClass then return true end
+	return isInventoryProxy( ply:GetWeapon( targetClass ) ) or selectedResolvesTo( ply, targetClass )
+end
+
 local function managedWeaponActive( ply, selectedOnly )
 	if not IsValid( ply ) or not ply:Alive() then
 		if ply ~= nil then activeManagedWeapons[ply] = nil end
 		return false
 	end
 	local weapon = activeWeapon( ply )
-	local targetClass = transitionTarget( ply )
-	if not weapon then return targetClass ~= nil end
+	if not weapon then return managedSwitchPending( ply ) end
 	local className = weapon:GetClass()
 	local managed = className == Bridge.HandClass or className == Bridge.InventoryClass
-		or targetClass == className or isInventoryProxy( weapon )
+		or isInventoryProxy( weapon )
 		or activeManagedWeapons[ply] == weapon or selectedResolvesTo( ply, className )
+	-- SelectOwnedWeapon also uses the predicted switch request to return to an
+	-- ordinary weapon. A request is not proof of inventory ownership and must
+	-- never seed the retained identity below.
 	-- A local pick/slot change updates the selected payload before the outgoing
 	-- SWEP's proxy flag or replacement arrives. Retain the identity we already
 	-- observed; class membership alone must never capture a foreign weapon.
@@ -153,7 +162,7 @@ end
 -- needs this because a slot key pressed inside the switch window would
 -- otherwise fall through to Garry's Mod weapon selection.
 function MC.API.HandWeapon.IsManagedSwitchPending( ply )
-	return transitionTarget( ply ) ~= nil
+	return managedSwitchPending( ply )
 end
 
 -- Public presentation facade. Game-owned hand weapons consume these stable

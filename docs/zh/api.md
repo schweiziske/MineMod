@@ -374,7 +374,7 @@ PlanPack 不代表 GPU 资源已准备。schema 及返回结果见
 | `Refresh(ply)`、`Reconcile(ply,stack,context)`、`QueueRefresh(ply,stack,context)` | SV；请求重新对齐选中物品和活动武器；CL 调用返回 server_only。 |
 | `SelectOwnedWeapon(ply,weapon)` | SV；请求通过预测命令切换到玩家已有的武器，并取消排队中的物品栏协调；返回 true,className 或 false,err，切换异步完成。 |
 | `IsManagedActive(ply)` | 两端各自的活动武器判断；兼容名 IsInventoryActive。 |
-| `IsSelectedActive(ply)`、`IsManagedSwitchPending(ply)` | CL；是否为选中物品武器 / 正在切换；IsHeldItemActive 是前者的兼容名。 |
+| `IsSelectedActive(ply)`、`IsManagedSwitchPending(ply)` | CL；是否为选中物品武器 / 正在切换到物品栏接管的武器，不包括返回普通武器；IsHeldItemActive 是前者的兼容名。 |
 | `GetBlockFirstPersonPose(weapon,leftHand)`、`GetBlockThirdPersonPose(ply,leftHand)`、`GetItemThirdPersonAnchor(ply,leftHand)` | CL；姿势/锚点可能返回多个值，必须直接接收，协议见客户端桥接。 |
 | `SamplePresentationLighting(pos,state)`、`DrawBlockState(stateId,pos,ang,scale,lighting)` | CL；采样位置为 MC 世界坐标，绘制位置由当前渲染上下文决定。 |
 

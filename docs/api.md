@@ -325,7 +325,7 @@ This engine layer obtains upper-layer selected items through providers, without 
 | `Refresh(ply)`, `Reconcile(ply,stack,context)`, `QueueRefresh(ply,stack,context)` | SV: realign selected item and active weapon; CL returns server_only. |
 | `SelectOwnedWeapon(ply,weapon)` | SV: request a predicted switch to an already owned weapon and cancel queued inventory reconciliation; returns true,className or false,err. Completion is asynchronous. |
 | `IsManagedActive(ply)` | Realm-local active weapon check; compatibility name IsInventoryActive. |
-| `IsSelectedActive(ply)`, `IsManagedSwitchPending(ply)` | CL: selected-item weapon / pending switch. IsHeldItemActive is an alias of the first. |
+| `IsSelectedActive(ply)`, `IsManagedSwitchPending(ply)` | CL: selected-item weapon / pending inventory-managed switch, excluding a return to an ordinary weapon. IsHeldItemActive is an alias of the first. |
 | `GetBlockFirstPersonPose(weapon,leftHand)`, `GetBlockThirdPersonPose(ply,leftHand)`, `GetItemThirdPersonAnchor(ply,leftHand)` | CL: poses/anchors may return multiple values; receive them directly. See client bridge contract. |
 | `SamplePresentationLighting(pos,state)`, `DrawBlockState(stateId,pos,ang,scale,lighting)` | CL: sample position uses MC-world coordinates; draw position follows the active render context. |
 
