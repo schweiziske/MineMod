@@ -26,7 +26,7 @@ end
 if MC and MC.API and MC.API.OnRegister then
     MC.API.OnRegister(Integration.RegisterHandWeaponResolver)
 else
-    hook.Add("MC.APIAvailable", "MCITEM.MCSWEP.RegisterHandWeaponResolver", Integration.RegisterHandWeaponResolver)
+    hook.Add("MC.APIAvailable", "MCITEM.MCSWEP.RegisterHandWeaponResolver", function() Integration.RegisterHandWeaponResolver() end)
 end
 -- Autorefresh re-runs this file without re-firing the engine lifecycle.
-hook.Add("OnReloaded", "MCITEM.MCSWEP.RegisterHandWeaponResolverReload", Integration.RegisterHandWeaponResolver)
+hook.Add("OnReloaded", "MCITEM.MCSWEP.RegisterHandWeaponResolverReload", function() Integration.RegisterHandWeaponResolver() end)

@@ -301,6 +301,16 @@ end
 API.Render = API.Render or {}
 local Render = API.Render
 
+-- Owned snapshot { id, build, adapter, family = "pbr"|"vanilla"|"other" } of
+-- the published render pack, or nil, "no_active_pack". Cache it and refresh on
+-- MC.RenderPackChanged instead of polling per frame.
+function Render.ActivePack()
+	local runtime = MC.RenderPackRuntime
+	local info = runtime and runtime.ActiveInfo and runtime.ActiveInfo() or nil
+	if not info then return nil, "no_active_pack" end
+	return info
+end
+
 function Render.RegisterDynamicLightProvider( id, definition )
 	return MC.RenderDynamicLights.RegisterProvider( id, definition )
 end

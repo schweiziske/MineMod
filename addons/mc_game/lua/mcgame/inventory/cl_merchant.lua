@@ -176,21 +176,19 @@ end
 
 function OFFER_BUTTON:Paint() return true end
 
-function OFFER_BUTTON:DoClick()
-	if not IsValid( self.Screen ) or self.OfferIndex == nil then return end
+-- AbstractWidget#mouseClicked: a left press plays ui.button.click and then
+-- runs onPress (MerchantScreen: shopItem = index + scrollOff, postButtonClick),
+-- whether or not the selection is accepted. DButton:DoClick fires on release,
+-- so the press is handled here and DButton's depressed/DoClick path is unused.
+function OFFER_BUTTON:OnMousePressed( code )
+	if code ~= MOUSE_LEFT or not IsValid( self.Screen ) or self.OfferIndex == nil then return end
+	UI.PlayButtonSound()
+	-- ContainerEventHandler#mouseClicked focuses the clicked widget and Button
+	-- draws button_highlighted while hovered or focused, so this row stays lit.
+	self.Screen.FocusedMerchantRow = self.Row
 	local ok, err = MC.RequestMerchantSelection( self.OfferIndex )
 	if not ok then
 		UI.SetError( self.Screen, err or "merchant_selection_failed" )
-	end
-end
-
-function OFFER_BUTTON:OnCursorEntered()
-	if IsValid( self.Screen ) then self.Screen.HoveredMerchantRow = self.Row end
-end
-
-function OFFER_BUTTON:OnCursorExited()
-	if IsValid( self.Screen ) and self.Screen.HoveredMerchantRow == self.Row then
-		self.Screen.HoveredMerchantRow = nil
 	end
 end
 
@@ -252,7 +250,10 @@ vgui.Register( "MCMerchantScroller", MERCHANT_SCROLLER, "DPanel" )
 local PANEL = {}
 
 function PANEL:Init()
-	BaseScreen.Init( self )
+	-- vgui.Create builds the MCInventoryScreen base first and already ran its
+	-- Init. Calling BaseScreen.Init again created a second set of controls and
+	-- left the first return button and recipe-book toggle visible, unsized, at
+	-- the top-left corner of the screen.
 	self.Merchant = true
 	self.MerchantScrollOffset = 0
 	self.MerchantOfferButtons = {}
@@ -274,6 +275,7 @@ function PANEL:Configure( session, state )
 	BaseScreen.Configure( self, session, state )
 	self.Merchant = true
 	self.RecipeBookOpen = false
+	self.FocusedMerchantRow = nil
 	self:ApplyMerchantState( session and session.merchantState )
 end
 
@@ -354,6 +356,15 @@ function PANEL:LayoutSpecialControls()
 	end
 end
 
+-- Hover is read from the row panels every frame, like AbstractWidget's
+-- isHovered: enter/exit events miss rows that scroll under a resting cursor.
+function PANEL:HoveredMerchantRow()
+	for index, button in ipairs( self.MerchantOfferButtons or {} ) do
+		if IsValid( button ) and button:IsVisible() and button:IsHovered() then return index - 1 end
+	end
+	return nil
+end
+
 function PANEL:MaxMerchantScrollOffset()
 	return math.max( 0, #( self.MerchantState and self.MerchantState.offers or {} ) - VISIBLE_OFFERS )
 end
@@ -362,7 +373,6 @@ function PANEL:SetMerchantScrollOffset( value )
 	value = math.Clamp( integer( value, 0 ), 0, self:MaxMerchantScrollOffset() )
 	if value == self.MerchantScrollOffset then return end
 	self.MerchantScrollOffset = value
-	self.HoveredMerchantRow = nil
 	self:LayoutSpecialControls()
 end
 
@@ -434,6 +444,7 @@ function PANEL:PaintContent()
 	local state = self.MerchantState or self.Session and self.Session.merchantState
 	local offers = state and state.offers or {}
 	local scale, left, top = self.Scale, self.Left, self.Top
+	local hoveredRow = self:HoveredMerchantRow()
 	UI.WithPointFiltering( function()
 		-- villager.png already stores the 276x166 screen on a transparent
 		-- 512x256 canvas. Draw that complete padded canvas through the shared
@@ -443,7 +454,7 @@ function PANEL:PaintContent()
 		for row = 0, VISIBLE_OFFERS - 1 do
 			local offer = offers[self.MerchantScrollOffset + row + 1]
 			if offer then
-				local buttonMaterial = self.HoveredMerchantRow == row
+				local buttonMaterial = ( hoveredRow == row or self.FocusedMerchantRow == row )
 					and TRADE_BUTTON_HIGHLIGHTED or TRADE_BUTTON
 				UI.DrawHorizontalNineSlice( buttonMaterial,
 					left + 5 * scale, top + ( 18 + row * 20 ) * scale,
@@ -509,7 +520,7 @@ function PANEL:PaintContent()
 end
 
 function PANEL:MerchantTooltipStack()
-	local row = self.HoveredMerchantRow
+	local row = self:HoveredMerchantRow()
 	local state = self.MerchantState
 	local offer = row ~= nil and state and state.offers[self.MerchantScrollOffset + row + 1] or nil
 	if not offer then return nil end

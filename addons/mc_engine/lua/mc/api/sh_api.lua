@@ -2190,6 +2190,7 @@ API.RegisterEvents( "mc.engine", {
 	["MC.APICapabilityRemoved"] = { realm = "shared", args = "name, version, owner", desc = "an optional public API capability was removed by its owner" },
 	["MC.ClientBlockStateChanged"] = { realm = "client", args = "bx, by, bz, oldStateId, newStateId, reason", desc = "one client voxel state projection changed; observers update derived caches without engine-to-game calls" },
 	["MC.ClientWorldProjectionChanged"] = { realm = "client", args = "reason, context", desc = "a bulk snapshot/hydration/unload/reset changed client world projections" },
+	["MC.RenderPackChanged"] = { realm = "client", args = "info{id,build,adapter,family}, previousInfo", desc = "a prepared render pack runtime was published (also when the same pack is re-prepared); same snapshot as Render.ActivePack()" },
 	["MC.BlocksChanged"] = { realm = "server", args = "changes{bx,by,bz,stateId,oldStateId,kind}[], revision, actor", desc = "one committed world transaction; kind: placed|removed|replaced|state_changed|block_entity_changed (not fired by /fill volume fills or mc_import raw imports)" },
 	["MC.CanPlayerEdit"] = { realm = "server", args = "ply", desc = "veto: return false to deny all world editing for this player action" },
 	["MC.CanPlayerEditCell"] = { realm = "server", args = "ply, bx, by, bz, placing, context{action,reason,stateId,newStateId}", desc = "veto: return false to deny a player place/break/use/modify at a cell; context.action is place|break|use|modify" },

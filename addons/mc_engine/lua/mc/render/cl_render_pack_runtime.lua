@@ -478,6 +478,7 @@ end
 
 local function publish( c )
 	local previous = L.active
+	local previousInfo = L.ActiveInfo()
 	c.phase, c.prepareMS = "active", ( SysTime() - c.started ) * 1000
 	L.active, L.pending, L.lastError = c, nil, nil
 	-- Load the new pack's saved settings now; listeners such as shadows cache them.
@@ -486,6 +487,24 @@ local function publish( c )
 	release( previous )
 	print( string.format( "[MC render pack] active=%s build=%s sections=%d quads=%d native=L2 prepare=%.2fms GPU=unverified",
 		c.pack, c.plan.owners["pack/" .. c.pack].definition.build, c.sectionCount, c.totalQuads, c.prepareMS ) )
+	-- Cold path: once per published runtime, including re-preparation of the same pack.
+	hook.Run( "MC.RenderPackChanged", L.ActiveInfo(), previousInfo )
+end
+
+-- Owned snapshot of the published pack: id, build, adapter and the adapter
+-- family ("pbr", "vanilla" or "other"); nil before the first publish.
+function L.ActiveInfo()
+	local c = L.active
+	if not c then return nil end
+	local owner = c.plan.owners["pack/" .. c.pack]
+	local definition = owner and owner.definition or {}
+	local adapter = definition.adapter
+	local family = "other"
+	if type( adapter ) == "string" then
+		if string.find( adapter, "^mc:pbr_quad_" ) then family = "pbr"
+		elseif string.find( adapter, "^mc:vanilla_quad_" ) then family = "vanilla" end
+	end
+	return { id = c.pack, build = definition.build, adapter = adapter, family = family }
 end
 
 local function updateCandidate( c )

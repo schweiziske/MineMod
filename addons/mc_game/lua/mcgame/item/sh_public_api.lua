@@ -130,6 +130,28 @@ function Items.RuntimeId( value )
 	return resolved and resolved.runtimeId or nil, err
 end
 
+-- FOOD component of an item name or ItemStack (stack components override the
+-- definition): owned { nutrition, saturation, alwaysEdible, consumable } or
+-- nil, "not_food" | "unknown_item". consumable reports the CONSUMABLE component.
+function Items.FoodProperties( value )
+	local subject = value
+	if type( value ) ~= "table" or value.item == nil then
+		local normalized = itemName( type( value ) == "table" and value.name or value )
+		subject = normalized and MC.GetItem and MC.GetItem( normalized ) or nil
+		if not subject then return nil, "unknown_item" end
+	elseif not ( MC.GetItem and MC.GetItem( value.item ) ) then
+		return nil, "unknown_item"
+	end
+	local food = MC.ItemFoodData and MC.ItemFoodData( subject ) or nil
+	if not food then return nil, "not_food" end
+	return {
+		nutrition = food.nutrition,
+		saturation = food.saturation,
+		alwaysEdible = food.alwaysEdible == true,
+		consumable = MC.ItemIsConsumable and MC.ItemIsConsumable( subject ) == true or false,
+	}
+end
+
 function Items.NameForRuntimeId( runtimeId )
 	local definition = MC.GetItem and MC.GetItem( tonumber( runtimeId ) ) or nil
 	if not definition then return nil, "unknown_item" end

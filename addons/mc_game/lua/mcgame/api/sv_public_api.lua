@@ -783,10 +783,159 @@ function Inventory.OpenMenu( ply, definition )
 	return sv.OpenVirtualMenu( ply, copy )
 end
 
+---------------------------------------------------------------- API.ItemDrops
+-- Read and collect world item drops (mc_item_drop) from non-player entities:
+-- Minecraft's Mob#pickUpItem / Fox / Allay / Panda / Piglin paths. Players keep
+-- using the drop's own touch pickup. All positions are MC-world coordinates.
+API.ItemDrops = API.ItemDrops or {}
+local ItemDrops = API.ItemDrops
+local Coords = API.Coords
+
+local function isLiveDrop( entity )
+	return IsValid( entity ) and entity:GetClass() == "mc_item_drop"
+		and not ( entity.IsMarkedForDeletion and entity:IsMarkedForDeletion() )
+		and not MC.IsEmptyItemStack( entity.MCItemStack )
+end
+
+-- options.item: one item name or a list/set of names; normalized once per query.
+local function itemFilter( value )
+	if value == nil then return nil end
+	local set = {}
+	if type( value ) == "string" then
+		local name = MC.NormalizeItemName( value )
+		if not name then return false end
+		set[name] = true
+		return set
+	end
+	if type( value ) ~= "table" then return false end
+	for key, entry in pairs( value ) do
+		local raw = type( key ) == "string" and entry == true and key or entry
+		local name = type( raw ) == "string" and MC.NormalizeItemName( raw ) or nil
+		if not name then return false end
+		set[name] = true
+	end
+	return set
+end
+
+-- options: { item = name | names, pickupReady = true, filter = fn( drop, stackCopy ),
+--            sortFrom = MC-world Vector (nearest first), limit = n }.
+local function filterDrops( candidates, options )
+	options = istable( options ) and options or {}
+	local items = itemFilter( options.item )
+	if items == false then return nil, "invalid_item" end
+	local filter = isfunction( options.filter ) and options.filter or nil
+	local result, distances = {}, nil
+	for i = 1, #candidates do
+		local entity = candidates[i]
+		if isLiveDrop( entity ) and ( not items or items[entity.MCItemStack.item] )
+		and ( options.pickupReady ~= true or entity:IsPickupReady() )
+		and ( not filter or filter( entity, MC.CopyItemStack( entity.MCItemStack ) ) ~= false ) then
+			result[#result + 1] = entity
+		end
+	end
+	if isvector( options.sortFrom ) and #result > 1 then
+		distances = {}
+		for i = 1, #result do
+			local position = Coords.EntityWorldPos( result[i] )
+			distances[result[i]] = isvector( position ) and position:DistToSqr( options.sortFrom ) or math.huge
+		end
+		table.sort( result, function( left, right )
+			if distances[left] ~= distances[right] then return distances[left] < distances[right] end
+			return left:EntIndex() < right:EntIndex()
+		end )
+	end
+	local limit = tonumber( options.limit )
+	if limit and limit >= 0 then
+		for i = #result, math.floor( limit ) + 1, -1 do result[i] = nil end
+	end
+	return result
+end
+
+function ItemDrops.IsDrop( entity )
+	return isLiveDrop( entity )
+end
+
+-- Drops whose bounds intersect the MC-world box. Returns a caller-owned list.
+function ItemDrops.FindInBox( minimum, maximum, options )
+	if not isvector( minimum ) or not isvector( maximum ) then return nil, "invalid_bounds" end
+	if not MC.ItemDropQuery or not MC.ItemDropQuery.InBox then return nil, "item_drops_api_unavailable" end
+	local candidates = MC.ItemDropQuery.InBox( math.min( minimum.x, maximum.x ), math.min( minimum.y, maximum.y ),
+		math.min( minimum.z, maximum.z ), math.max( minimum.x, maximum.x ), math.max( minimum.y, maximum.y ),
+		math.max( minimum.z, maximum.z ), {} )
+	return filterDrops( candidates, options )
+end
+
+function ItemDrops.FindInSphere( center, radius, options )
+	radius = tonumber( radius )
+	if not isvector( center ) or not radius or radius < 0 then return nil, "invalid_sphere" end
+	if not MC.ItemDropQuery or not MC.ItemDropQuery.InSphere then return nil, "item_drops_api_unavailable" end
+	return filterDrops( MC.ItemDropQuery.InSphere( center, radius, {} ), options )
+end
+
+-- Java getEntitiesOfClass( ItemEntity, getBoundingBox().inflate( x, y, z ) ):
+-- inflate values are Source units per side; the entity's own MC-world AABB is
+-- the base, so callers never convert engine positions.
+function ItemDrops.FindNearEntity( entity, inflateX, inflateY, inflateZ, options )
+	if not IsValid( entity ) then return nil, "invalid_entity" end
+	local minimum, maximum = Coords.EntityWorldAABB( entity )
+	if not isvector( minimum ) or not isvector( maximum ) then return nil, "invalid_entity_bounds" end
+	local x = math.max( 0, tonumber( inflateX ) or 0 )
+	local y = math.max( 0, tonumber( inflateY ) or x )
+	local z = math.max( 0, tonumber( inflateZ ) or x )
+	local inflate = Vector( x, y, z )
+	return ItemDrops.FindInBox( minimum - inflate, maximum + inflate, options )
+end
+
+-- stackCopy | nil, err
+function ItemDrops.GetStack( entity )
+	if not isLiveDrop( entity ) then return nil, "invalid_drop" end
+	return MC.CopyItemStack( entity.MCItemStack )
+end
+
+-- Pickup delay only (ItemEntity#hasPickUpDelay). Owner-only targets restrict
+-- player touch pickup, not mobs, as in Java.
+function ItemDrops.IsPickupReady( entity )
+	if not isLiveDrop( entity ) then return false, "invalid_drop" end
+	return entity:IsPickupReady() == true
+end
+
+-- Remove up to count items (default: the whole stack) from a drop on behalf of
+-- actor. The entity is removed when emptied. options: { sound = false,
+-- ignorePickupDelay = true, reason = string }. MC.CanEntityTakeItemDrop can veto;
+-- MC.EntityTookItemDrop observes. Returns takenStackCopy | nil, err.
+function ItemDrops.Take( entity, count, actor, options )
+	if not isLiveDrop( entity ) then return nil, "invalid_drop" end
+	options = istable( options ) and options or {}
+	if options.ignorePickupDelay ~= true and not entity:IsPickupReady() then return nil, "pickup_delay" end
+	local stack = entity.MCItemStack
+	local amount = count == nil and stack.count or math.floor( tonumber( count ) or 0 )
+	if amount <= 0 then return nil, "invalid_count" end
+	amount = math.min( amount, stack.count )
+	local taken = MC.CopyItemStack( stack, amount )
+	local context = { reason = tostring( options.reason or "entity_pickup" ), count = amount }
+	if hook and hook.Run and hook.Run( "MC.CanEntityTakeItemDrop", entity, actor, MC.CopyItemStack( taken ), context ) == false then
+		return nil, "vetoed"
+	end
+
+	local position = entity:GetPos()
+	if amount >= stack.count then
+		entity:Remove()
+	else
+		local ok, err = entity:SetDropStack( MC.CopyItemStack( stack, stack.count - amount ) )
+		if not ok then return nil, err or "invalid_stack" end
+	end
+	if options.sound ~= false then entity:PlayPickupSound( position ) end
+	if hook and hook.Run then
+		hook.Run( "MC.EntityTookItemDrop", entity, actor, MC.CopyItemStack( taken ), context )
+	end
+	return taken
+end
+
 API.RegisterCapability( "mc.game.fire", 1, Fire, "mc.game" )
 API.RegisterCapability( "mc.game.shears", 1, Shears, "mc.game" )
 API.RegisterCapability( "mc.game.mining", 1, Mining, "mc.game" )
 API.RegisterCapability( "mc.game.inventory", 2, Inventory, "mc.game" )
+API.RegisterCapability( "mc.game.item_drops", 1, ItemDrops, "mc.game" )
 
 if API.HandWeapon then
 	API.HandWeapon.RegisterSelectionProvider( "mc.game.server_inventory", {

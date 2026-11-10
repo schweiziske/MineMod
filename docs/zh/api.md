@@ -254,6 +254,7 @@ Commit(plan,transaction,snapshots,radius,options)，输入为公开快照。
 | `Items.Register(definition)` | `true, {name,runtimeId?,pending}` 或 `nil, err`；注册阶段使用 id、block、maxStack、texture、kind 等字段。 |
 | `Items.Resolve(value)` | mc_game：`{name,runtimeId,blockName,maxStack,maxDamage}` 或 `nil, err`。 |
 | `Items.RuntimeId(value)`、`NameForRuntimeId(runtimeId)`、`ListNames()`、`RegistrySnapshot()` | mc_game 的当前映射/快照。 |
+| `Items.FoodProperties(value)` | mc_game：物品名或 ItemStack 的 FOOD 组件（物品栈自带组件优先），返回副本 `{nutrition,saturation,alwaysEdible,consumable}`；不是食物返回 `nil, "not_food"`，未知物品返回 `nil, "unknown_item"`。 |
 | `Items.TranslationKey(value)`、`DisplayName(value,locale)` | mc_game：`key,varsCopy` / 本地化名称。 |
 | `BlockLoot.RegisterDefaultBlockItem(blockName,itemName)` | 注册普通 dropSelf，返回 `ok, recordOrErr`；省略 itemName 时冻结阶段解析绑定 BlockItem。 |
 | `Creative.RegisterCategory(definition)` | `ok, categoryOrErr`；id、icon、showTitle、canScroll、可选 titleKey。槽位由注册表分配。 |
@@ -312,6 +313,7 @@ Commit(plan,transaction,snapshots,radius,options)，输入为公开快照。
 | `Light` | `SampleRGB(pos,emission)`、`SamplePresentationRGB(pos,emission)` 返回 r,g,b。都使用持续 MC 世界位置；后者用于物品/粒子所在格 lightmap 加移动光源，不使用手部姿势或 render-relative 位置。 |
 | `Light` | `SkyLightAt(bx,by,bz)`、`ScaleRGB(r,g,b,gain)`。 |
 | `Render` | `MarkCellDirty(bx,by,bz)` 重建几何/采样，不重跑世界光传播；`MarkAllDirty()` 昂贵，仅全局注册变化时使用。 |
+| `Render` | `ActivePack()`：当前已发布渲染包的快照副本 `{id,build,adapter,family}`（family 为 `pbr`/`vanilla`/`other`），没有时返回 nil,"no_active_pack"。请缓存结果并在 `MC.RenderPackChanged` 时刷新。 |
 | `Render` | `RegisterDynamicLightProvider(id,definition)` / `UnregisterDynamicLightProvider(id)`；`RegisterSSRDepthRenderer(id,callback)` / `UnregisterSSRDepthRenderer(id)`；`RegisterSpecialBlockEmitter(blockName,emitter)`。这些是高级渲染扩展，definition/回调协议以门面链接的 provider 实现为准。 |
 
 可选的 Minecraft 玩家光照（`mc_light_entity`）会让持有 ARC9 的玩家保留 Source 原生光照与绘制路径，避免第三人称动画求解器重复执行。
@@ -384,7 +386,7 @@ PlanPack 不代表 GPU 资源已准备。schema 及返回结果见
 ## 可选 mc_game 运行时接口
 
 这些接口不是只安装 mc_engine 就有的。共享能力有 `mc.game.items/creative/block_loot/config`（v1），
-服务端有 `mc.game.fire/shears/mining`（v1）、`mc.game.inventory`（v2），客户端有
+服务端有 `mc.game.fire/shears/mining/item_drops`（v1）、`mc.game.inventory`（v2），客户端有
 `mc.game.item_renderer/inventory_ui`（v1）。用 GetCapability/OnCapability 协商后调用。
 
 ```lua
@@ -409,6 +411,16 @@ local stack, slot, selectedError = inventory.GetSelected( ply )
 | `TakeSelectedWithDurability(ply,amount,context)` | stack,infinite,mutationResult,err，原子取出用于投射物。 |
 | `CanTakeSelectedWithDurability(ply,amount,context)` | allowed,infinite,stack,err。 |
 | `HasInfiniteMaterials(ply)`、`Open(ply)` | 无限材料判定 / 打开库存。 |
+
+`mc.game.item_drops`（v1）供非玩家实体读取和拾取地上的掉落物（`mc_item_drop`）。位置用 MC 世界坐标；返回的列表归调用方所有。
+
+| SV 调用 | 返回/用途 |
+| --- | --- |
+| `ItemDrops.FindInBox(minimum,maximum,options)`、`FindInSphere(center,radius,options)` | 掉落物列表；参数无效时 nil,err。 |
+| `ItemDrops.FindNearEntity(entity,inflateX,inflateY,inflateZ,options)` | 对应 Java `getBoundingBox().inflate(x,y,z)`：实体自身世界 AABB 每侧外扩若干 Source 单位。 |
+| options | `item`（物品名或列表）、`pickupReady=true`（跳过仍在拾取冷却的）、`filter(drop,stackCopy)`（返回 false 跳过）、`sortFrom`（由近到远）、`limit`。 |
+| `ItemDrops.IsDrop(entity)`、`GetStack(drop)`、`IsPickupReady(drop)` | 是否有效掉落物 / stackCopy 或 nil,err / 拾取冷却是否结束。指定拾取者只限制玩家拾取，与 Java 一致。 |
+| `ItemDrops.Take(drop,count,actor,options)` | takenStackCopy 或 nil,err。取走至多 count 个（默认整堆），取空时移除掉落物。默认播放拾取音效，`options.sound=false` 关闭；另有 `ignorePickupDelay`、`reason`。否决事件 `MC.CanEntityTakeItemDrop`，观察事件 `MC.EntityTookItemDrop`。 |
 
 弓弩弹药、使用状态、掉落实体、装备写入和菜单入口的精确签名与返回值见
 [游戏服务端公开门面](../../addons/mc_game/lua/mcgame/api/sv_public_api.lua)。同文件还公开
@@ -439,6 +451,7 @@ before/after 还需 anchor。高级 `RegisterProvider(id,provider,priority)` / `
 | `MC.ChunkHydrated(key,cx,cy,cz)` | SV 惰性数据驻留，不产生逐格事件。 |
 | `MC.ClientBlockStateChanged(bx,by,bz,oldStateId,newStateId,reason)` | CL 单格投影改变。 |
 | `MC.ClientWorldProjectionChanged(reason,context)` | CL 批量快照/加载/卸载/重置；可重建派生索引。 |
+| `MC.RenderPackChanged(info,previousInfo)` | CL 一个准备好的渲染包运行时已发布（同一个包重新准备也会触发）；info 与 `Render.ActivePack()` 相同。 |
 | `MC.StateRevisionApplied(generation,revision)` | CL 完成一次权威修订。 |
 | `MC.PlayerPlacedBlock`、`MC.PlayerBrokeBlock`、`MC.PlayerUsedBlock` | SV 玩家操作已提交。 |
 | `MC.PlayerPickedUpFluid`、`MC.PlayerPlacedFluid` | SV 桶的库存事务确认后提交。 |

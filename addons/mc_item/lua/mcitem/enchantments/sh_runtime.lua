@@ -1162,11 +1162,12 @@ end
 
 timer.Simple(0, Runtime.Install)
 hook.Remove("InitPostEntity", "MCITEM.EnchantmentRuntime.Install")
-hook.Add("InitPostEntity", "MCITEM.EnchantmentRuntime.Install", Runtime.Install)
+hook.Add("InitPostEntity", "MCITEM.EnchantmentRuntime.Install", function() Runtime.Install() end)
 hook.Remove("OnReloaded", "MCITEM.EnchantmentRuntime.Install")
-hook.Add("OnReloaded", "MCITEM.EnchantmentRuntime.Install", Runtime.Install)
+hook.Add("OnReloaded", "MCITEM.EnchantmentRuntime.Install", function() Runtime.Install() end)
 hook.Remove("MC.APIReady", "MCITEM.EnchantmentRuntime.Install")
-hook.Add("MC.APIReady", "MCITEM.EnchantmentRuntime.Install", Runtime.Install)
+-- Lifecycle notifications must return nil: hook.Run stops even on false.
+hook.Add("MC.APIReady", "MCITEM.EnchantmentRuntime.Install", function() Runtime.Install() end)
 
 if SERVER then
     local function windBurstImpulseState(playerEntity)

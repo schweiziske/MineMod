@@ -162,6 +162,24 @@ function ENT:GetDropStack()
 	return MC.CopyItemStack( self.MCItemStack )
 end
 
+-- ClientboundTakeItemEntityPacket: ITEM_PICKUP at volume 0.2, pitch
+-- ((r - r) * 0.7 + 1) * 2. Players and other collectors share it.
+function ENT:PlayPickupSound( position )
+	if not sound or not sound.Play then return end
+	local pitch = math.Clamp( math.floor( ( ( math.Rand( 0, 1 ) - math.Rand( 0, 1 ) ) * 0.7 + 1 ) * 200 + 0.5 ), 1, 255 )
+	sound.Play( "mc/random/pop.ogg", position or self:GetPos(), 70, pitch, 0.2 )
+end
+
+-- Pickup delay and the in-progress guards, without the player/target rules.
+function ENT:IsPickupReady()
+	if self.MCPickingUp or self.MCDropMerging then return false end
+	if self.IsMarkedForDeletion and self:IsMarkedForDeletion() then return false end
+	if itemParity() then
+		return not MC.ItemEntityParity.PickupReady or MC.ItemEntityParity.PickupReady( self )
+	end
+	return CurTime() >= ( self.MCPickupReadyAt or 0 )
+end
+
 function ENT:TryPickup( ply )
 	if self.MCPickingUp then return false end
 	if itemParity() then
@@ -200,10 +218,7 @@ function ENT:TryPickup( ply )
 	end
 	self.MCFailedPickupPlayer, self.MCFailedPickupContainer, self.MCFailedPickupStack = nil, nil, nil
 	local moved = math.max( 0, ( tonumber( stack.count ) or 0 ) - ( tonumber( remaining and remaining.count ) or 0 ) )
-	if moved > 0 and sound and sound.Play then
-		local pitch = math.Clamp( math.floor( ( ( math.Rand( 0, 1 ) - math.Rand( 0, 1 ) ) * 0.7 + 1 ) * 200 + 0.5 ), 1, 255 )
-		sound.Play( "mc/random/pop.ogg", pickupPosition, 70, pitch, 0.2 )
-	end
+	if moved > 0 then self:PlayPickupSound( pickupPosition ) end
 	if MC.IsEmptyItemStack( remaining ) then
 		self:Remove()
 	else

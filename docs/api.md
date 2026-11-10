@@ -219,6 +219,7 @@ The engine retains neutral item/drop registration queues. `mc_game` supplies ful
 | `Items.Register(definition)` | `true, {name,runtimeId?,pending}` or `nil, err`; register id, block, maxStack, texture, kind, etc. during registration. |
 | `Items.Resolve(value)` | mc_game: `{name,runtimeId,blockName,maxStack,maxDamage}`, or `nil, err`. |
 | `Items.RuntimeId(value)`, `NameForRuntimeId(runtimeId)`, `ListNames()`, `RegistrySnapshot()` | Current mc_game mappings/snapshots. |
+| `Items.FoodProperties(value)` | mc_game: FOOD component of an item name or ItemStack (stack components win) as an owned `{nutrition,saturation,alwaysEdible,consumable}`, or `nil, "not_food"`/`"unknown_item"`. |
 | `Items.TranslationKey(value)`, `DisplayName(value,locale)` | mc_game: `key,varsCopy` / localized name. |
 | `BlockLoot.RegisterDefaultBlockItem(blockName,itemName)` | Register ordinary dropSelf; `ok, recordOrErr`. If itemName is omitted, resolve the bound BlockItem at freeze time. |
 | `Creative.RegisterCategory(definition)` | `ok, categoryOrErr`; id, icon, showTitle, canScroll, optional titleKey. Registry allocates slots. |
@@ -272,6 +273,7 @@ See [localization.md](localization.md) for I18n queries, count variants, notific
 | `Light` | SampleRGB(pos,emission), SamplePresentationRGB(pos,emission) return r,g,b. Both take persistent MC-world positions; the latter samples item/particle-cell lightmap plus moving lights, not hand poses or render-relative positions. |
 | `Light` | SkyLightAt(bx,by,bz), ScaleRGB(r,g,b,gain). |
 | `Render` | MarkCellDirty(bx,by,bz) rebuilds geometry/samples without world-light propagation. MarkAllDirty() is expensive; reserve for global registration changes. |
+| `Render` | ActivePack(): owned snapshot `{id,build,adapter,family}` of the published render pack (family `pbr`/`vanilla`/`other`), or nil,"no_active_pack". Cache it and refresh on `MC.RenderPackChanged`. |
 | `Render` | RegisterDynamicLightProvider(id,definition) / UnregisterDynamicLightProvider(id); RegisterSSRDepthRenderer(id,callback) / UnregisterSSRDepthRenderer(id); RegisterSpecialBlockEmitter(blockName,emitter). Advanced render extensions; follow provider definitions linked by the facade. |
 
 Optional Minecraft player lighting (`mc_light_entity`) leaves ARC9 players on Source's normal lighting/draw path to avoid running their third-person animation solver twice.
@@ -333,7 +335,7 @@ Weapon switches use the owning client's usercmd so SWEP Deploy/Holster run with 
 
 ## Optional mc_game runtime interfaces
 
-These require more than mc_engine. Shared capabilities: `mc.game.items/creative/block_loot/config` (v1). Server: `mc.game.fire/shears/mining` (v1), `mc.game.inventory` (v2). Client: `mc.game.item_renderer/inventory_ui` (v1). Negotiate with GetCapability/OnCapability before calling.
+These require more than mc_engine. Shared capabilities: `mc.game.items/creative/block_loot/config` (v1). Server: `mc.game.fire/shears/mining/item_drops` (v1), `mc.game.inventory` (v2). Client: `mc.game.item_renderer/inventory_ui` (v1). Negotiate with GetCapability/OnCapability before calling.
 
 ```lua
 local inventory, err = MC.API.GetCapability( "mc.game.inventory", 2 )
@@ -358,6 +360,16 @@ Inventory slots are **0..35**, unlike the client creative Hotbar's **1..9**.
 | `CanTakeSelectedWithDurability(ply,amount,context)` | allowed,infinite,stack,err. |
 | `HasInfiniteMaterials(ply)`, `Open(ply)` | Infinite-material check / open inventory. |
 
+`mc.game.item_drops` (v1) lets non-player entities read and collect world item drops (`mc_item_drop`). Positions are MC-world coordinates; lists are caller-owned.
+
+| Call | Returns and semantics |
+| --- | --- |
+| `ItemDrops.FindInBox(minimum,maximum,options)`, `FindInSphere(center,radius,options)` | List of drops; nil,err on invalid input. |
+| `ItemDrops.FindNearEntity(entity,inflateX,inflateY,inflateZ,options)` | Java `getBoundingBox().inflate(x,y,z)`: the entity's own world AABB grown by Source units per side. |
+| options | `item` (name or names), `pickupReady=true` (skip drops still in their pickup delay), `filter(drop,stackCopy)` (return false to skip), `sortFrom` (nearest first), `limit`. |
+| `ItemDrops.IsDrop(entity)`, `GetStack(drop)`, `IsPickupReady(drop)` | Live-drop check / stackCopy or nil,err / pickup delay elapsed. Owner-only targets restrict player pickup only, as in Java. |
+| `ItemDrops.Take(drop,count,actor,options)` | takenStackCopy or nil,err. Removes up to count (default all); the drop is removed when empty. Plays the pickup sound unless `options.sound=false`; `ignorePickupDelay`, `reason`. Veto `MC.CanEntityTakeItemDrop`, observer `MC.EntityTookItemDrop`. |
+
 Exact bow/crossbow ammunition, use-state, drop-entity, equipment-write, and menu signatures are in the [game server facade](../addons/mc_game/lua/mcgame/api/sv_public_api.lua), which also exposes `Farming.UseHeld(ply,bx,by,bz,context)`, `Tools.UseHeld(ply,action,context)`, Fire, Shears, and Mining. Do not replace inventory-transaction operations with World.SetBlock plus manual item removal. Client capability fields are in the [client bridge](../addons/mc_game/lua/mcgame/api/cl_engine_bridge.lua).
 
 Shared mc_game `CreativeStacks` extends existing categories rather than creating categories after freeze. `RegisterEntries(tab,id,operations,priority)` / `UnregisterEntries(id)` use actions append/prepend/before/after, visibility both/tab/search, and count=1 stacks. before/after also require anchor. Advanced `RegisterProvider(id,provider,priority)` / `UnregisterProvider(id)`, `Invalidate()`, and `Contains(stack)` are in the [creative-entry implementation](../addons/mc_game/lua/mcgame/inventory/sh_creative_stacks.lua). Explicitly Invalidate after external state changes. Wait for `MC.CreativeStacksAPIReady`, not just engine APIReady.
@@ -376,6 +388,7 @@ Shared mc_game `CreativeStacks` extends existing categories rather than creating
 | `MC.ChunkHydrated(key,cx,cy,cz)` | SV lazy data hydration, without per-cell events. |
 | `MC.ClientBlockStateChanged(bx,by,bz,oldStateId,newStateId,reason)` | CL single-cell projection change. |
 | `MC.ClientWorldProjectionChanged(reason,context)` | CL bulk snapshot/load/unload/reset; suitable for rebuilding derived indices. |
+| `MC.RenderPackChanged(info,previousInfo)` | CL a prepared render pack runtime was published, including re-preparation of the same pack; info matches `Render.ActivePack()`. |
 | `MC.StateRevisionApplied(generation,revision)` | CL applied an authoritative revision. |
 | `MC.PlayerPlacedBlock`, `MC.PlayerBrokeBlock`, `MC.PlayerUsedBlock` | SV committed player actions. |
 | `MC.PlayerPickedUpFluid`, `MC.PlayerPlacedFluid` | SV committed bucket inventory transactions. |

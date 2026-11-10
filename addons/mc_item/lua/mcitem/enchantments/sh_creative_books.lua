@@ -204,10 +204,13 @@ end
 Books.ProviderId = PROVIDER_ID
 
 if hook and hook.Add then
-    hook.Add( "MC.CreativeStacksAPIReady", "MCITEM.CreativeEnchantedBooks.Ready", Books.RegisterProvider )
-    hook.Add( "MC.APIReady", "MCITEM.CreativeEnchantedBooks.APIReady", Books.RegisterProvider )
-    hook.Add( "InitPostEntity", "MCITEM.CreativeEnchantedBooks.Init", Books.RegisterProvider )
-    hook.Add( "OnReloaded", "MCITEM.CreativeEnchantedBooks.Reload", Books.RegisterProvider )
+    -- RegisterProvider returns a status; notifications must not pass it back
+    -- to hook.Run and prevent other addons from completing their startup.
+    local function registerProvider() Books.RegisterProvider() end
+    hook.Add( "MC.CreativeStacksAPIReady", "MCITEM.CreativeEnchantedBooks.Ready", registerProvider )
+    hook.Add( "MC.APIReady", "MCITEM.CreativeEnchantedBooks.APIReady", registerProvider )
+    hook.Add( "InitPostEntity", "MCITEM.CreativeEnchantedBooks.Init", registerProvider )
+    hook.Add( "OnReloaded", "MCITEM.CreativeEnchantedBooks.Reload", registerProvider )
 end
 
 if timer and timer.Simple then timer.Simple( 0, Books.RegisterProvider ) end

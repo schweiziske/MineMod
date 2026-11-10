@@ -51,6 +51,8 @@ API.RegisterEvents( GAME_OWNER, {
 	["MC.DeathProtectionTriggered"] = { realm = "server", args = "ply, hand, stack, damageInfo, metadata", desc = "held death protection triggered" },
 	["MC.PlayerAttackedEntity"] = { realm = "server", args = "ply, target, metadata", desc = "the Minecraft hand completed a melee attack" },
 	["MC.EntityDropsEnabled"] = { realm = "server", args = "", desc = "query: return false to suppress decoration/entity item drops" },
+	["MC.CanEntityTakeItemDrop"] = { realm = "server", args = "drop, actor, takenStack, context{reason,count}", desc = "veto: return false to stop ItemDrops.Take collecting a world item drop" },
+	["MC.EntityTookItemDrop"] = { realm = "server", args = "drop, actor, takenStack, context{reason,count}", desc = "ItemDrops.Take removed items from a world item drop for a non-player collector" },
 	["MC.DecorationPlaced"] = { realm = "server", args = "ply, entity, stack, context", desc = "a decoration entity was placed from a game item" },
 	["MC.DecorationAnalogOutputChanged"] = { realm = "shared", args = "entity, output, previous", desc = "a decoration entity's comparator-like analog output changed" },
 	["MC.EntityAnalogOutputAt"] = { realm = "shared", args = "bx, by, bz, dx, dy, dz, context", desc = "query: entity-provided comparator analog output in one target cell" },
