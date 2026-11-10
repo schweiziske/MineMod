@@ -821,6 +821,10 @@ net.Receive( "mc_inventory_close", function()
 	if State.session and State.session.containerId == containerId and State.session.token == token then
 		State.session = nil
 		State.actions = {}
+		-- Closing the owned panel must not depend on prediction or event listeners.
+		if MC.InventoryUI and MC.InventoryUI.CloseInventoryScreen then
+			MC.InventoryUI.CloseInventoryScreen()
+		end
 		MC.UseClientPlayerInventoryView()
 		MC.RebuildClientPrediction( true )
 		emit( "MC.InventoryClosed", reason, State )

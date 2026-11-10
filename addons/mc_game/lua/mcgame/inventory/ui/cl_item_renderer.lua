@@ -363,7 +363,17 @@ function Renderer.ModelPlan( stack, options )
 	if weapon then
 		if not weapon.plan then
 			local path = weapon.icon
+			local definition = list.Get( "Weapon" )[weapon.class]
+			if definition and type( definition.IconOverride ) == "string" and definition.IconOverride ~= "" then
+				path = definition.IconOverride
+			end
 			local material = Material( path, "smooth" )
+			if material:IsError() then
+				-- Match ContentIcon's support for old VGUI/entities VMT icons.
+				path = string.gsub( path, "entities/", "VGUI/entities/" )
+				path = string.gsub( path, "%.png$", "" )
+				material = Material( path, "smooth" )
+			end
 			if material:IsError() then
 				path = "icon16/gun.png"
 				material = Material( path, "smooth" )

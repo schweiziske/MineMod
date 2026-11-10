@@ -69,7 +69,11 @@ end
 
 local function closeIfInvalid( reason )
 	local state = MC.ClientInventory
-	if not state or not state.session then return end
+	if not state or not state.session then
+		-- Clear orphaned panels even when a close event did not reach the UI.
+		if IsValid( UI.Screen ) then UI.Screen:CloseInventory( false ) end
+		return
+	end
 	local ply = LocalPlayer()
 	if not IsValid( ply ) or not ply:Alive() then
 		UI.CloseFromWeapon( reason )
