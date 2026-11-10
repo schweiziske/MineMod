@@ -274,6 +274,8 @@ See [localization.md](localization.md) for I18n queries, count variants, notific
 | `Render` | MarkCellDirty(bx,by,bz) rebuilds geometry/samples without world-light propagation. MarkAllDirty() is expensive; reserve for global registration changes. |
 | `Render` | RegisterDynamicLightProvider(id,definition) / UnregisterDynamicLightProvider(id); RegisterSSRDepthRenderer(id,callback) / UnregisterSSRDepthRenderer(id); RegisterSpecialBlockEmitter(blockName,emitter). Advanced render extensions; follow provider definitions linked by the facade. |
 
+Optional Minecraft player lighting (`mc_light_entity`) leaves ARC9 players on Source's normal lighting/draw path to avoid running their third-person animation solver twice.
+
 ### Resource packs and atlases (CL)
 
 `Resources.VERSION == "1.2"`. Preparing a resource stack and switching published atlases are separate operations. PrepareSelection synchronously prepares CPU data; it does not publish a GPU atlas.
@@ -319,12 +321,15 @@ This engine layer obtains upper-layer selected items through providers, without 
 | `IsManagedClass(value)`, `IsInventoryControlledClass(value)`, `OwnsFirstPersonPresentation(value)` | SH: ownership and first-person presentation capability for a class/entity. |
 | `Resolve(stack,ply)` | SH: className,resolverId; failure nil,err. |
 | `Refresh(ply)`, `Reconcile(ply,stack,context)`, `QueueRefresh(ply,stack,context)` | SV: realign selected item and active weapon; CL returns server_only. |
+| `SelectOwnedWeapon(ply,weapon)` | SV: request a predicted switch to an already owned weapon and cancel queued inventory reconciliation; returns true,className or false,err. Completion is asynchronous. |
 | `IsManagedActive(ply)` | Realm-local active weapon check; compatibility name IsInventoryActive. |
 | `IsSelectedActive(ply)`, `IsManagedSwitchPending(ply)` | CL: selected-item weapon / pending switch. IsHeldItemActive is an alias of the first. |
 | `GetBlockFirstPersonPose(weapon,leftHand)`, `GetBlockThirdPersonPose(ply,leftHand)`, `GetItemThirdPersonAnchor(ply,leftHand)` | CL: poses/anchors may return multiple values; receive them directly. See client bridge contract. |
 | `SamplePresentationLighting(pos,state)`, `DrawBlockState(stateId,pos,ang,scale,lighting)` | CL: sample position uses MC-world coordinates; draw position follows the active render context. |
 
 See the [client bridge](../addons/mc_engine/lua/mc/integration/cl_hand_weapon_bridge.lua) for exact returns and draw parameters. These APIs preserve public Lua names; do not infer switching state from internal network fields.
+
+Weapon switches use the owning client's usercmd so SWEP Deploy/Holster run with normal prediction; bots select through server StartCommand. A temporarily vetoed selection is retried. During delayed Holster, newer requests replace the queued destination; the current stage completes before the latest destination is selected. The bridge retains proxies until the final activation is confirmed and cancels the chain when the player selects a different weapon. A stage that does not complete within ten seconds reports `hand_weapon_switch_timeout`. Integrations must not call Deploy/Holster manually to compensate for server-forced selection.
 
 ## Optional mc_game runtime interfaces
 

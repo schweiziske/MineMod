@@ -377,12 +377,12 @@ end
 
 -- Use the same owned lighting scope for actors and props, including cleanup
 -- if material setup or the model draw raises an error.
-local function drawPlayerWithSourceLighting( ply )
+local function drawPlayerWithSourceLighting( ply, flags )
 	local state = {}
 	playerSourceDrawActive = true
 	local ok, err = pcall( function()
 		beginModelLighting( ply, true, state )
-		ply:DrawModel()
+		ply:DrawModel( flags )
 	end )
 	playerSourceDrawActive = false
 	endModelLighting( state )
@@ -476,13 +476,21 @@ end
 
 hook.Remove( "PrePlayerDraw", "mc_entity_lighting_players" )
 hook.Remove( "PostPlayerDraw", "mc_entity_lighting_players" )
-hook.Add( "PrePlayerDraw", "mc_entity_lighting_players", function( ply )
+hook.Add( "PrePlayerDraw", "mc_entity_lighting_players", function( ply, flags )
 	-- The shadow owner supplies a depth material and a light-space camera.
 	-- Do not recurse into the colour-lighting draw while collecting its pose.
 	if MC.RenderPBRShadows and MC.RenderPBRShadows.rendering then return end
 	if playerSourceDrawActive then return end
 	if not playersEnabled() then return end
-	drawPlayerWithSourceLighting( ply )
+	-- ARC9 TPIK advances animation caches in PrePlayerDraw even when it runs
+	-- twice in one frame. Its player draw must stay on the nonrecursive path.
+	local weapon = ply:GetActiveWeapon()
+	if IsValid( weapon ) and weapon.ARC9 then return end
+	-- Bone-merged weapon draws also dispatch PrePlayerDraw with flags == 0.
+	-- Leave those callbacks to the weapon addon and preserve the actual player's
+	-- STUDIO flags in the recursive draw (including ARC9's TPIK/depth handling).
+	if flags == 0 then return end
+	drawPlayerWithSourceLighting( ply, flags )
 	return true
 end )
 hook.Remove( "PostDrawOpaqueRenderables", "mc_entity_lighting_safety" )

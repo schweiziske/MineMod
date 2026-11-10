@@ -93,17 +93,17 @@ mc_native_status
 lua_run_cl print(BRANCH, jit.arch, mcmesh and mcmesh.EngineBranch, mcmesh and mcmesh.AbiVersion())
 ```
 
-`mcmesh.EngineBranch` 为 `public` 或 `x86-64`，`AbiVersion()` 当前为 `8`。
+`mcmesh.EngineBranch` 为 `public` 或 `x86-64`，`AbiVersion()` 当前为 `9`。
 
 ### 没有模块或加载失败时
 
-加载器（`addons/mc_engine/lua/autorun/mc_load.lua`）在客户端启动时按 `jit.arch` 查找 `lua/bin/` 下对应的文件，找到后 `require( "minemod_native" )`，检查 `AbiVersion()` 是否等于 `8`，以及必需的导出是否齐全。约 1 秒后在聊天栏提示：
+加载器（`addons/mc_engine/lua/autorun/mc_load.lua`）在客户端启动时按 `jit.arch` 查找 `lua/bin/` 下对应的文件，找到后 `require( "minemod_native" )`，检查 `AbiVersion()` 是否等于 `9`，以及必需的导出是否齐全。约 1 秒后在聊天栏提示：
 
 | 情况 | 提示 | 结果 |
 | --- | --- | --- |
 | 没有找到文件 | 黄色“未检测到优化 DLL”，附下载地址 | 使用 Lua 后端，Native 设置分类隐藏 |
-| ABI 低于 8 | “Native DLL 版本过期（当前 ABI x，需要 ABI 8）” | 使用 Lua 后端 |
-| 模块初始化报错、ABI 高于 8、缺少导出 | 红色“Native DLL 初始化失败”及原因，并记录故障 `native_module_init_failed` | 使用 Lua 后端 |
+| ABI 低于 9 | “Native DLL 版本过期（当前 ABI x，需要 ABI 9）” | 使用 Lua 后端 |
+| 模块初始化报错、ABI 高于 9、缺少导出 | 红色“Native DLL 初始化失败”及原因，并记录故障 `native_module_init_failed` | 使用 Lua 后端 |
 | 非 Windows 或未知架构 | 无提示 | 使用 Lua 后端 |
 
 这三种提示出现时同时注册 `mc_native_download` 命令，在浏览器中打开 `mc_load.lua` 中的下载地址。
@@ -292,7 +292,7 @@ Lua 侧的对应文件：
 
 | 分组 | 导出 |
 | --- | --- |
-| 身份与版本 | `AbiVersion()`（8）、`EngineBranch`、`AtlasRegionVersion`（1）、`L2Version()`（2）、`L2DrawVersion()`（1）、`L2LightingVersion()`（2）、`L2PixelTextureVersion()`（2）、`L2LightTextureRevision()`、`GetTakeoverCapabilities()` |
+| 身份与版本 | `AbiVersion()`（9）、`EngineBranch`、`AtlasRegionVersion`（1）、`L2Version()`（2）、`L2DrawVersion()`（1）、`L2LightingVersion()`（2）、`L2PixelTextureVersion()`（2）、`L2LightTextureRevision()`、`GetTakeoverCapabilities()` |
 | 世界会话 | `CreateWorldSession(config, catalog)` 返回 userdata，方法包括 `ApplyBatch`、`StartBinaryDecode`/`PollBinaryDecode`/`CommitBinaryDecode`、传输（`BeginTransport` 等）、`GetCell`、`GetSectionInfo`、`IsMeshReady`、`GetLight`、`Pump`、`RequestLighting`、`Reconfigure`、`Reset`、`Close`、`GetStats` |
 | L2 建面 | `CompileL2Template`/`Cube`/`Model`/`Fluid`、`SubmitL2Section`、`SubmitWorldL2Section`、`SubmitWorldL2Relight`、`PollL2Section`、`CanSubmitL2`、`CancelL2Section`、`GetL2SectionParts`、`GetWorldL2Topology`、`IsWorldL2Current`、`IsWorldL2GeometryCurrent`、`UploadL2PartNative`、`UploadL2MeshPixels`、`StageL2Relight`、`UploadL2Relight`、`UploadL2RelightBatch`、`FinishL2Relight`、`GetL2Stats` |
 | L2 诊断 | `BuildL2Mesh`、`UploadL2Part`、`GetL2LightPart`、`ReadL2MeshPixels` |
@@ -309,7 +309,7 @@ Lua 侧的对应文件：
 
 Lua 分三层检查兼容性：
 
-1. `mc_load.lua` 要求 `AbiVersion() == 8`，并要求 31 个旧 L1 导出存在（列表为 `NATIVE_MODULE_EXPORTS`）。因此删除旧导出会让加载器拒绝模块，即使主路径已不调用它们。
+1. `mc_load.lua` 要求 `AbiVersion() == 9`，并要求 31 个旧 L1 导出存在（列表为 `NATIVE_MODULE_EXPORTS`）。因此删除旧导出会让加载器拒绝模块，即使主路径已不调用它们。
 2. `MC.NativeL2.Probe` 要求 L2 建面、像素、绘制函数齐全，`L2Version`、`L2LightingVersion`、`L2PixelTextureVersion` 为 2，`L2DrawVersion` 为 1，`CompileL2Fluid` 存在，并且 `GetTakeoverCapabilities().shapeWorker == 1`。
 3. 启用世界会话时要求 `GetTakeoverCapabilities()` 返回 `protocol=2`、`versionEncoding=hex64`，`worldSession`、`stateCatalog`、`binarySection`、`worldLighting`、`l2Snapshot`、`worldAdapter`、`fluidWorker` 均为 1。
 

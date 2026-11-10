@@ -344,3 +344,9 @@ function HandWeapon.QueueRefresh( ply, stack, context )
 	if not Bridge.QueueReconcile then return false, "hand_weapon_bridge_unavailable" end
 	return Bridge.QueueReconcile( ply, stack, context )
 end
+
+function HandWeapon.SelectOwnedWeapon( ply, weapon )
+	if not SERVER then return false, "server_only" end
+	if not Bridge.SelectOwnedWeapon then return false, "hand_weapon_bridge_unavailable" end
+	return Bridge.SelectOwnedWeapon( ply, weapon )
+end

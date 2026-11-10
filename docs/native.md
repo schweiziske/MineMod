@@ -91,17 +91,17 @@ Where client Lua is allowed (single-player, or `sv_allowcslua` on the server), i
 lua_run_cl print(BRANCH, jit.arch, mcmesh and mcmesh.EngineBranch, mcmesh and mcmesh.AbiVersion())
 ```
 
-`mcmesh.EngineBranch` is `public` or `x86-64`; the current `AbiVersion()` is `8`.
+`mcmesh.EngineBranch` is `public` or `x86-64`; the current `AbiVersion()` is `9`.
 
 ### Missing modules and load failures
 
-At client startup, `addons/mc_engine/lua/autorun/mc_load.lua` uses `jit.arch` to find the DLL under `lua/bin/`, calls `require( "minemod_native" )`, requires `AbiVersion() == 8`, and checks required exports. After about one second, it reports:
+At client startup, `addons/mc_engine/lua/autorun/mc_load.lua` uses `jit.arch` to find the DLL under `lua/bin/`, calls `require( "minemod_native" )`, requires `AbiVersion() == 9`, and checks required exports. After about one second, it reports:
 
 | Condition | Message | Result |
 | --- | --- | --- |
 | File missing | Yellow missing-optimization-DLL notice with download URL | Lua backend; Native settings hidden |
-| ABI below 8 | Outdated Native DLL notice, with actual and required ABI | Lua backend |
-| Initialization error, ABI above 8, or missing exports | Red initialization-failed notice with reason; fault `native_module_init_failed` | Lua backend |
+| ABI below 9 | Outdated Native DLL notice, with actual and required ABI | Lua backend |
+| Initialization error, ABI above 9, or missing exports | Red initialization-failed notice with reason; fault `native_module_init_failed` | Lua backend |
 | Non-Windows or unknown architecture | No notice | Lua backend |
 
 The first three notices also register `mc_native_download`, which opens the download URL configured in `mc_load.lua`.
@@ -287,7 +287,7 @@ All exports are registered in `native/Module/Module.cpp` under global `mcmesh`. 
 
 | Group | Exports |
 | --- | --- |
-| Identity and versions | `AbiVersion()` (8), `EngineBranch`, `AtlasRegionVersion` (1), `L2Version()` (2), `L2DrawVersion()` (1), `L2LightingVersion()` (2), `L2PixelTextureVersion()` (2), `L2LightTextureRevision()`, `GetTakeoverCapabilities()` |
+| Identity and versions | `AbiVersion()` (9), `EngineBranch`, `AtlasRegionVersion` (1), `L2Version()` (2), `L2DrawVersion()` (1), `L2LightingVersion()` (2), `L2PixelTextureVersion()` (2), `L2LightTextureRevision()`, `GetTakeoverCapabilities()` |
 | World sessions | `CreateWorldSession(config, catalog)` returns userdata with methods `ApplyBatch`, `StartBinaryDecode`/`PollBinaryDecode`/`CommitBinaryDecode`, transport (`BeginTransport` and others), `GetCell`, `GetSectionInfo`, `IsMeshReady`, `GetLight`, `Pump`, `RequestLighting`, `Reconfigure`, `Reset`, `Close`, `GetStats` |
 | L2 meshing | `CompileL2Template`/`Cube`/`Model`/`Fluid`, `SubmitL2Section`, `SubmitWorldL2Section`, `SubmitWorldL2Relight`, `PollL2Section`, `CanSubmitL2`, `CancelL2Section`, `GetL2SectionParts`, `GetWorldL2Topology`, `IsWorldL2Current`, `IsWorldL2GeometryCurrent`, `UploadL2PartNative`, `UploadL2MeshPixels`, `StageL2Relight`, `UploadL2Relight`, `UploadL2RelightBatch`, `FinishL2Relight`, `GetL2Stats` |
 | L2 diagnostics | `BuildL2Mesh`, `UploadL2Part`, `GetL2LightPart`, `ReadL2MeshPixels` |
@@ -304,7 +304,7 @@ The client resolves `mc_light_atlas_size` once per connection; see [lighting atl
 
 Lua checks compatibility at three levels:
 
-1. `mc_load.lua` requires `AbiVersion() == 8` and all 31 legacy L1 exports listed in `NATIVE_MODULE_EXPORTS`. Removing an unused legacy export still causes rejection.
+1. `mc_load.lua` requires `AbiVersion() == 9` and all 31 legacy L1 exports listed in `NATIVE_MODULE_EXPORTS`. Removing an unused legacy export still causes rejection.
 2. `MC.NativeL2.Probe` requires L2 mesh, pixel, and draw functions; `L2Version`, `L2LightingVersion`, and `L2PixelTextureVersion` equal to 2; `L2DrawVersion` equal to 1; `CompileL2Fluid`; and `GetTakeoverCapabilities().shapeWorker == 1`.
 3. World sessions require `protocol=2`, `versionEncoding=hex64`, and `worldSession`, `stateCatalog`, `binarySection`, `worldLighting`, `l2Snapshot`, `worldAdapter`, and `fluidWorker` all equal to 1.
 

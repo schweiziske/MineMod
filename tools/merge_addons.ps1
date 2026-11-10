@@ -55,6 +55,7 @@ try {
 	$filesByPath = @{}
 	$ignoredCount = 0
 	foreach ($addon in (Get-ChildItem -LiteralPath $addonsRoot -Directory | Sort-Object Name)) {
+		if ($addon.Name -eq "mc_shaderpack_pbr") { continue }
 		$manifestPath = Join-Path $addon.FullName "addon.json"
 		$ignorePatterns = @()
 		if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {

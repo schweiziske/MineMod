@@ -372,7 +372,7 @@ if CLIENT then
 		"BindLightAtlasMaterial", "GetLightAtlasStats", "GetLightAtlasSlot",
 		"DrawVisible", "SetChunkVisible", "SetSimpleGreedy", "SetDirectionalDraw", "SetOcclusionCull", "SetLod",
 	}
-	MC.NativeMeshABI = 8
+	MC.NativeMeshABI = 9
 	local NATIVE_MODULE_URL = "https://github.com/schweiziske/MineMod/releases"
 
 	local function expectedNativeModulePath()

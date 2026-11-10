@@ -7,6 +7,7 @@ MC.HandWeaponBridge = MC.HandWeaponBridge or {}
 
 local Bridge = MC.HandWeaponBridge
 local activeManagedWeapons = setmetatable( {}, { __mode = "k" } )
+local transitionStates = setmetatable( {}, { __mode = "k" } )
 
 local function selectedPayload( ply )
 	return Bridge.GetSelected and Bridge.GetSelected( ply ) or nil
@@ -24,11 +25,78 @@ local function isInventoryProxy( weapon )
 end
 
 local function transitionTarget( ply )
-	if not IsValid( ply ) or not ply.GetNW2Bool
-	or ply:GetNW2Bool( "MC_HandWeaponTransition", false ) ~= true then return nil end
-	local className = ply.GetNW2String and ply:GetNW2String( "MC_HandWeaponTargetClass", "" ) or ""
-	return className ~= "" and className or nil
+	if not IsValid( ply ) then return nil end
+	local request = ply:GetNW2String( "MC_HandWeaponSwitchRequest", "" )
+	local state = transitionStates[ply]
+	if not state then
+		state = {}
+		transitionStates[ply] = state
+	end
+	if state.request ~= request then
+		state.request = request
+		local generation, className = string.match( request, "^(%d+):(.+)$" )
+		state.generation, state.class = tonumber( generation ), className
+	end
+	return state.class, state.generation
 end
+
+local pendingSelectionClass, pendingSelectionGeneration
+local previousSelectionClass, selectionSource
+local canceledGeneration
+local nextSelectionAt = 0
+local function pendingSelection( ply )
+	local className, generation = transitionTarget( ply )
+	if className ~= pendingSelectionClass or generation ~= pendingSelectionGeneration then
+		previousSelectionClass = generation == pendingSelectionGeneration and pendingSelectionClass or nil
+		if generation ~= pendingSelectionGeneration then selectionSource = activeWeapon( ply ) end
+		pendingSelectionClass = className
+		pendingSelectionGeneration = generation
+		nextSelectionAt = 0
+	end
+	return className, generation
+end
+
+hook.Add( "CreateMove", "mc_hand_weapon_bridge_switch", function( command )
+	local ply = LocalPlayer()
+	local className, generation = pendingSelection( ply )
+	if not className or not ply:Alive() or canceledGeneration == generation then return end
+	local weapon = ply:GetWeapon( className )
+	-- The target class can replicate before a newly given SWEP entity does.
+	if not IsValid( weapon ) then return end
+	local currentWeapon = activeWeapon( ply )
+	-- PlayerSwitchWeapon is not predicted clientside in singleplayer. Observe
+	-- an actual manual activation there too, and discard an already queued retry.
+	if currentWeapon and currentWeapon ~= selectionSource and currentWeapon ~= weapon
+	and currentWeapon:GetClass() ~= previousSelectionClass then
+		canceledGeneration = generation
+		command:SelectWeapon( currentWeapon )
+		input.SelectWeapon( currentWeapon )
+		return
+	end
+	if currentWeapon == weapon then
+		-- Old-stage/source exemptions only cover delayed prediction. Once the
+		-- target is active, returning to either weapon is a manual activation.
+		previousSelectionClass, selectionSource = nil, weapon
+		return
+	end
+	if CurTime() < nextSelectionAt then return end
+	-- Some SWEPs temporarily veto Holster without scheduling their own retry
+	-- (e.g. during a runaway burst). Retry through normal predicted selection.
+	input.SelectWeapon( weapon )
+	nextSelectionAt = CurTime() + 0.25
+end )
+
+hook.Add( "PlayerSwitchWeapon", "mc_hand_weapon_bridge_switch", function( ply, oldWeapon, newWeapon )
+	if ply ~= LocalPlayer() or not IsValid( newWeapon ) then return end
+	local className, generation = pendingSelection( ply )
+	if not className or newWeapon:GetClass() == className then return end
+	if newWeapon:GetClass() == previousSelectionClass
+	and ( not IsValid( oldWeapon ) or oldWeapon:GetClass() ~= className ) then return end
+	-- CreateMove may already have queued a retry for the next command. Replace
+	-- it as well as canceling retries, including later stages of this same chain.
+	canceledGeneration = generation
+	input.SelectWeapon( newWeapon )
+end )
 
 local function selectedResolvesTo( ply, className )
 	local stack = selectedPayload( ply )

@@ -314,6 +314,8 @@ Commit(plan,transaction,snapshots,radius,options)，输入为公开快照。
 | `Render` | `MarkCellDirty(bx,by,bz)` 重建几何/采样，不重跑世界光传播；`MarkAllDirty()` 昂贵，仅全局注册变化时使用。 |
 | `Render` | `RegisterDynamicLightProvider(id,definition)` / `UnregisterDynamicLightProvider(id)`；`RegisterSSRDepthRenderer(id,callback)` / `UnregisterSSRDepthRenderer(id)`；`RegisterSpecialBlockEmitter(blockName,emitter)`。这些是高级渲染扩展，definition/回调协议以门面链接的 provider 实现为准。 |
 
+可选的 Minecraft 玩家光照（`mc_light_entity`）会让持有 ARC9 的玩家保留 Source 原生光照与绘制路径，避免第三人称动画求解器重复执行。
+
 ### 资源包与图集（CL）
 
 `Resources.VERSION == "1.2"`。资源栈准备与已发布 atlas 切换是两个操作：
@@ -368,6 +370,7 @@ PlanPack 不代表 GPU 资源已准备。schema 及返回结果见
 | `IsManagedClass(value)`、`IsInventoryControlledClass(value)`、`OwnsFirstPersonPresentation(value)` | SH；类/实体的归属与第一人称表现能力判断。 |
 | `Resolve(stack,ply)` | SH；className,resolverId，失败 nil,err。 |
 | `Refresh(ply)`、`Reconcile(ply,stack,context)`、`QueueRefresh(ply,stack,context)` | SV；请求重新对齐选中物品和活动武器；CL 调用返回 server_only。 |
+| `SelectOwnedWeapon(ply,weapon)` | SV；请求通过预测命令切换到玩家已有的武器，并取消排队中的物品栏协调；返回 true,className 或 false,err，切换异步完成。 |
 | `IsManagedActive(ply)` | 两端各自的活动武器判断；兼容名 IsInventoryActive。 |
 | `IsSelectedActive(ply)`、`IsManagedSwitchPending(ply)` | CL；是否为选中物品武器 / 正在切换；IsHeldItemActive 是前者的兼容名。 |
 | `GetBlockFirstPersonPose(weapon,leftHand)`、`GetBlockThirdPersonPose(ply,leftHand)`、`GetItemThirdPersonAnchor(ply,leftHand)` | CL；姿势/锚点可能返回多个值，必须直接接收，协议见客户端桥接。 |
@@ -375,6 +378,8 @@ PlanPack 不代表 GPU 资源已准备。schema 及返回结果见
 
 客户端具体返回与绘制参数见 [客户端桥接](../../addons/mc_engine/lua/mc/integration/cl_hand_weapon_bridge.lua)。
 这些 API 保留公开 Lua 名称，不要通过读取内部网络字段来猜测切换状态。
+
+换枪通过持有者客户端的 usercmd 发起，使 SWEP 的 Deploy/Holster 保持正常预测；机器人通过服务端 StartCommand 选择。暂时被拒绝的选择会重试。延迟 Holster 期间，新请求只替换排队目标，当前阶段完成后再选择最新目标。桥接在确认最终武器激活后才清理代理，玩家选择不同武器会取消整条切换链。单个阶段十秒内未完成时报告 `hand_weapon_switch_timeout`。集成层不得手动调用 Deploy/Holster 来补偿服务端强制换枪。
 
 ## 可选 mc_game 运行时接口
 

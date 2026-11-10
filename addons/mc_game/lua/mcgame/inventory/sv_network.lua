@@ -525,7 +525,8 @@ net.Receive( "mc_inventory_exit_hand", function( _, ply )
 	end
 	-- Close normally so cursor/crafting stacks are returned before switching.
 	if not SV.ClosePlayerInventory( ply, "return_to_gmod", token ) then return end
-	ply:SelectWeapon( target:GetClass() )
+	local switched, result = MC.API.HandWeapon.SelectOwnedWeapon( ply, target )
+	MC.Check( switched, "inventory_return_weapon_switch", "%s", tostring( result ) )
 end )
 
 net.Receive( "mc_inventory_action", function( _, ply )

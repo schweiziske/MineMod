@@ -4,7 +4,7 @@
 
 namespace mcmesh::handshake
 {
-inline constexpr int ABI_VERSION = 8;
+inline constexpr int ABI_VERSION = 9;
 
 // 返回版本信息
 inline int AbiVersion(GarrysMod::Lua::ILuaBase *LUA)

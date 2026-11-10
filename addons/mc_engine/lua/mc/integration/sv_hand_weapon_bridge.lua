@@ -6,10 +6,11 @@ MC = MC or {}
 MC.HandWeaponBridge = MC.HandWeaponBridge or {}
 
 local Bridge = MC.HandWeaponBridge
-local SWITCH_CONFIRM_ATTEMPTS = 8
+local SWITCH_CONFIRM_TIMEOUT = 10
 
 Bridge.PendingReconciles = Bridge.PendingReconciles or setmetatable( {}, { __mode = "k" } )
 Bridge.SwitchGenerations = Bridge.SwitchGenerations or setmetatable( {}, { __mode = "k" } )
+Bridge.PendingSwitches = Bridge.PendingSwitches or setmetatable( {}, { __mode = "k" } )
 
 local function activeWeapon( ply )
 	local weapon = IsValid( ply ) and ply:GetActiveWeapon() or nil
@@ -63,11 +64,16 @@ local function setTransition( ply, targetClass )
 	local active = isstring( targetClass ) and targetClass ~= ""
 	if ply.SetNW2Bool then ply:SetNW2Bool( "MC_HandWeaponTransition", active ) end
 	if ply.SetNW2String then ply:SetNW2String( "MC_HandWeaponTargetClass", active and targetClass or "" ) end
+	-- Publish the chain identity and target together; separately replicated
+	-- fields can otherwise combine a new generation with an old target.
+	ply:SetNW2String( "MC_HandWeaponSwitchRequest", active
+		and tostring( Bridge.SwitchGenerations[ply] ) .. ":" .. targetClass or "" )
 end
 
 local function nextSwitchGeneration( ply )
-	local generation = ( Bridge.SwitchGenerations[ply] or 0 ) + 1
+	local generation = ( Bridge.SwitchGenerations[ply] or 0 ) % 2147483647 + 1
 	Bridge.SwitchGenerations[ply] = generation
+	Bridge.PendingSwitches[ply] = nil
 	return generation
 end
 
@@ -113,43 +119,89 @@ local function selectedStack( ply )
 	return Bridge.GetSelected and Bridge.GetSelected( ply ) or nil
 end
 
-local function finishSwitch( ply, targetClass, targetWeapon, generation, attempt )
-	if Bridge.SwitchGenerations[ply] ~= generation then return end
-	if not IsValid( ply ) or not ply:Alive() or not IsValid( targetWeapon ) then
+local function beginSwitch( ply, targetWeapon, generation )
+	local pending = {
+		weapon = targetWeapon,
+		class = targetWeapon:GetClass(),
+		source = activeWeapon( ply ),
+		generation = generation,
+	}
+	Bridge.PendingSwitches[ply] = pending
+	setTransition( ply, pending.class )
+	-- The client selects the owned entity in a predicted usercmd. Keep the old
+	-- proxy alive until that command actually activates the target; do not force
+	-- Deploy/Holster out of prediction with Player:SelectWeapon retries.
+	timer.Simple( SWITCH_CONFIRM_TIMEOUT, function()
+		if Bridge.PendingSwitches[ply] ~= pending then return end
+		Bridge.PendingSwitches[ply] = nil
 		setTransition( ply, nil )
-		return
-	end
-
-	local currentWeapon = activeWeapon( ply )
-	if currentWeapon == targetWeapon then
-		setTransition( ply, nil )
-		timer.Simple( 0, function()
-			if Bridge.SwitchGenerations[ply] ~= generation then return end
-			if activeWeapon( ply ) ~= targetWeapon then return end
-			cleanupProxyWeapons( ply, targetClass )
-		end )
-		return
-	end
-
-	-- A deliberate switch to a foreign weapon cancels the pending inventory
-	-- transition.  NULL or the previous inventory proxy is only an engine timing
-	-- window, so retry without deleting either proxy.
-	if IsValid( currentWeapon ) and not mayAutoSwitch( currentWeapon ) then
-		setTransition( ply, nil )
-		return
-	end
-	if attempt >= SWITCH_CONFIRM_ATTEMPTS then
-		setTransition( ply, nil )
-		if ErrorNoHalt then
-			ErrorNoHalt( "[MC] hand weapon switch did not activate " .. targetClass .. "\n" )
-		end
-		return
-	end
-
-	ply:SelectWeapon( targetClass )
-	timer.Simple( 0, function()
-		finishSwitch( ply, targetClass, targetWeapon, generation, attempt + 1 )
+		MC.Fault( "hand_weapon_switch_timeout", "Could not activate %s", pending.class )
 	end )
+end
+
+local function confirmSwitch( ply, pending )
+	Bridge.PendingSwitches[ply] = nil
+	local destination = pending.nextWeapon
+	if destination and destination ~= pending.weapon then
+		if not IsValid( destination ) or destination:GetOwner() ~= ply then
+			setTransition( ply, nil )
+			MC.Fault( "hand_weapon_switch_target", "Queued switch target is no longer owned" )
+			return
+		end
+		-- Keep the chain identity stable so a late network update cannot revive
+		-- a chain the client already canceled with a manual selection.
+		beginSwitch( ply, destination, pending.generation )
+		return
+	end
+	setTransition( ply, nil )
+	timer.Simple( 0, function()
+		if Bridge.SwitchGenerations[ply] ~= pending.generation then return end
+		if activeWeapon( ply ) ~= pending.weapon then return end
+		cleanupProxyWeapons( ply, pending.class )
+	end )
+end
+
+hook.Add( "StartCommand", "mc_hand_weapon_bridge_switch", function( ply, command )
+	local pending = Bridge.PendingSwitches[ply]
+	if not pending then return end
+	if not IsValid( pending.weapon ) or pending.weapon:GetOwner() ~= ply then
+		Bridge.PendingSwitches[ply] = nil
+		setTransition( ply, nil )
+		MC.Fault( "hand_weapon_switch_target", "Switch target %s is no longer owned", pending.class )
+		return
+	end
+	local currentWeapon = activeWeapon( ply )
+	if currentWeapon == pending.weapon then
+		confirmSwitch( ply, pending )
+		return
+	end
+	if currentWeapon ~= pending.source and IsValid( currentWeapon ) and not mayAutoSwitch( currentWeapon ) then
+		Bridge.PendingSwitches[ply] = nil
+		setTransition( ply, nil )
+		return
+	end
+	-- Bots have no owning client to produce the predicted selection command.
+	if ply:IsBot() then command:SelectWeapon( pending.weapon ) end
+end )
+
+function Bridge.SelectOwnedWeapon( ply, weapon )
+	if not IsValid( ply ) or not ply:IsPlayer() or not ply:Alive() then return false, "invalid_player" end
+	if not IsValid( weapon ) or not weapon:IsWeapon() or weapon:GetOwner() ~= ply then
+		return false, "weapon_not_owned"
+	end
+	Bridge.PendingReconciles[ply] = nil
+	local pending = Bridge.PendingSwitches[ply]
+	if pending then
+		pending.nextWeapon = weapon
+		return true, weapon:GetClass()
+	end
+	local generation = nextSwitchGeneration( ply )
+	if activeWeapon( ply ) == weapon then
+		setTransition( ply, nil )
+		return true, weapon:GetClass()
+	end
+	beginSwitch( ply, weapon, generation )
+	return true, weapon:GetClass()
 end
 
 function Bridge.QueueReconcile( ply, stack, context )
@@ -165,6 +217,7 @@ function Bridge.QueueReconcile( ply, stack, context )
 
 	pending.queued = true
 	timer.Simple( 0, function()
+		if Bridge.PendingReconciles[ply] ~= pending then return end
 		local request = Bridge.PendingReconciles[ply]
 		Bridge.PendingReconciles[ply] = nil
 		if not request or not IsValid( ply ) then return end
@@ -179,13 +232,13 @@ function Bridge.Reconcile( ply, stack, context )
 	local currentWeapon = activeWeapon( ply )
 	if not mayAutoSwitch( currentWeapon, context ) then return false, "foreign_weapon_active" end
 	local currentClass = IsValid( currentWeapon ) and currentWeapon:GetClass() or nil
-	local generation = nextSwitchGeneration( ply )
 	-- Any open inventory/container session owns the weapon lifecycle. Slot changes
 	-- update the authoritative selection immediately, but the visible SWEP changes
 	-- only after ClosePlayerInventory clears the session and republishes the held
 	-- item. This keeps the screen open while clicking ordinary or enchanted tools.
 	if Bridge.IsSelectionSessionOpen and Bridge.IsSelectionSessionOpen( ply ) then
-		setTransition( ply, nil )
+		local pending = Bridge.PendingSwitches[ply]
+		if pending then pending.nextWeapon = nil end
 		return false, "inventory_screen_open"
 	end
 
@@ -194,12 +247,10 @@ function Bridge.Reconcile( ply, stack, context )
 	if targetClass and not storedWeapon( targetClass ) then targetClass = nil end
 	targetClass = targetClass or Bridge.HandClass
 	if not storedWeapon( targetClass ) then
-		setTransition( ply, nil )
 		return false, "fallback_weapon_unavailable"
 	end
 
 	local switching = currentClass ~= targetClass
-	if switching then setTransition( ply, targetClass ) end
 	local adapter = Bridge.WeaponAdapters[targetClass]
 	if adapter and not adapter.matches( stack ) then adapter = nil end
 	local weapon, giveError = ensureOwnedWeapon( ply, targetClass, adapter )
@@ -209,11 +260,9 @@ function Bridge.Reconcile( ply, stack, context )
 		adapter = nil
 		targetClass = Bridge.HandClass
 		switching = currentClass ~= targetClass
-		setTransition( ply, switching and targetClass or nil )
 		weapon, giveError = ensureOwnedWeapon( ply, targetClass )
 	end
 	if not weapon then
-		setTransition( ply, nil )
 		return false, giveError
 	end
 	if targetClass ~= Bridge.HandClass and targetClass ~= Bridge.InventoryClass then
@@ -225,11 +274,16 @@ function Bridge.Reconcile( ply, stack, context )
 		end
 		hook.Run( "MC.HandWeaponStackBound", ply, weapon, stack )
 	end
+	local pending = Bridge.PendingSwitches[ply]
+	if pending then
+		-- Delayed Holster has captured the current stage's target. Keep it and
+		-- replace only the destination to request after that stage activates.
+		pending.nextWeapon = weapon
+		return true, targetClass
+	end
+	local generation = nextSwitchGeneration( ply )
 	if switching then
-		ply:SelectWeapon( targetClass )
-		timer.Simple( 0, function()
-			finishSwitch( ply, targetClass, weapon, generation, 1 )
-		end )
+		beginSwitch( ply, weapon, generation )
 	else
 		setTransition( ply, nil )
 		timer.Simple( 0, function()
@@ -257,6 +311,14 @@ hook.Add( "MC.HandWeaponResolversChanged", "mc_hand_weapon_bridge_refresh_resolv
 
 hook.Add( "PlayerSwitchWeapon", "mc_hand_weapon_bridge_enter_inventory_hand", function( ply, _, newWeapon )
 	if not IsValid( newWeapon ) then return end
+	local pending = Bridge.PendingSwitches[ply]
+	if pending then
+		-- Holster may veto or delay this event. Confirmation belongs to the next
+		-- usercmd that observes the target active, not to this pre-switch hook.
+		if newWeapon == pending.weapon then return end
+		nextSwitchGeneration( ply )
+		setTransition( ply, nil )
+	end
 	local className = newWeapon:GetClass()
 	-- Integrations may still register a separate inventory-only entry point.
 	if className == Bridge.InventoryClass then return end
@@ -268,17 +330,20 @@ hook.Add( "PlayerSwitchWeapon", "mc_hand_weapon_bridge_enter_inventory_hand", fu
 	if className ~= Bridge.HandClass and not isInventoryProxy( newWeapon ) and selectedClass ~= className then
 		-- Closing an inventory queues held-item reconciliation. A deliberate
 		-- return to a GMod weapon must cancel that work before it can switch back.
-		nextSwitchGeneration( ply )
+		local generation = nextSwitchGeneration( ply )
 		Bridge.PendingReconciles[ply] = nil
 		setTransition( ply, nil )
 		timer.Simple( 0, function()
+			if Bridge.SwitchGenerations[ply] ~= generation then return end
 			if IsValid( ply ) and activeWeapon( ply ) == newWeapon then
 				cleanupProxyWeapons( ply, className )
 			end
 		end )
 		return
 	end
+	local generation = Bridge.SwitchGenerations[ply]
 	timer.Simple( 0, function()
+		if Bridge.SwitchGenerations[ply] ~= generation then return end
 		if not IsValid( ply ) or activeWeapon( ply ) ~= newWeapon then return end
 		if className ~= Bridge.HandClass then
 			-- Selecting a manual weapon_mcitem_* only adopts it when it represents
@@ -305,5 +370,6 @@ end )
 
 hook.Add( "PlayerDisconnected", "mc_hand_weapon_bridge_clear_transition_on_disconnect", function( ply )
 	Bridge.PendingReconciles[ply] = nil
+	Bridge.PendingSwitches[ply] = nil
 	Bridge.SwitchGenerations[ply] = nil
 end )
