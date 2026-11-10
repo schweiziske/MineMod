@@ -18,7 +18,6 @@ local LIGHTNING_HORIZONTAL_RADIUS = 3
 local LIGHTNING_BELOW = 3
 local LIGHTNING_ABOVE = 9
 local LIGHTNING_SEED_PART = 16777216 -- 2^24; two parts preserve Java's 48-bit renderer seed.
-local MINECRAFT_GRAVITY_BLOCKS_PER_SECOND_SQR = 32
 
 Runtime.Originals = Runtime.Originals or {}
 Runtime.Wrappers = Runtime.Wrappers or {}
@@ -756,48 +755,9 @@ local function tryChannelWorld(projectile, trace)
     })
 end
 
-local function armWindBurstFallImmunity(owner, position)
-    if not IsValid(owner) or not owner:IsPlayer() or not isvector(position) then return nil end
-    local previous = Runtime.WindBurstImpulseStates[owner]
-    local impactZ = position.z
-    -- MaceItem.calculateImpactPosition preserves an earlier, lower impulse
-    -- origin while chaining Wind Burst bounces.
-    if previous and tonumber(previous.impactZ) and previous.impactZ <= impactZ then
-        impactZ = previous.impactZ
-    end
-    local state = {
-        impactZ = impactZ,
-        armedAt = CurTime(),
-        airborne = true,
-    }
-    Runtime.WindBurstImpulseStates[owner] = state
-    return state
-end
-
-local function windBurstLaunchVelocityScale()
-    local blockSize = isfunction(MCITEM.BlockSize) and MCITEM.BlockSize() or 36.5
-    local minecraftGravity = MINECRAFT_GRAVITY_BLOCKS_PER_SECOND_SQR * blockSize
-    local sourceGravity = 600
-    local gravityConVar = isfunction(GetConVar) and GetConVar("sv_gravity") or nil
-    if gravityConVar and isfunction(gravityConVar.GetFloat) then
-        sourceGravity = math.abs(tonumber(gravityConVar:GetFloat()) or sourceGravity)
-    end
-    if minecraftGravity <= 0 or sourceGravity <= 0 then return 1 end
-
-    -- The data-pack multipliers are still the exact Java 1.2 / 1.75 / 2.2.
-    -- This factor only converts their ballistic apex to Source gravity. Reusing
-    -- mcitem_knockback_scale (default 0.3) made Wind Burst III rise only about
-    -- five blocks instead of the roughly thirty-block Java trajectory.
-    return math.sqrt(sourceGravity / minecraftGravity)
-end
-
-Runtime.WindBurstLaunchVelocityScale = windBurstLaunchVelocityScale
-
 local function launchWindBurstOwner(position, owner, level, multiplier)
     if not IsValid(owner) or not isvector(position) then return vector_origin end
-    armWindBurstFallImmunity(owner, position)
 
-    local launchScale = windBurstLaunchVelocityScale()
     local context = {
         kind = "mace_wind_burst",
         enchantmentLevel = level,
@@ -811,7 +771,8 @@ local function launchWindBurstOwner(position, owner, level, multiplier)
         exposure = 1,
         impact = 1,
         knockbackMultiplier = multiplier,
-        velocityScale = launchScale,
+        javaWindImpulse = true,
+        resetWindVertical = true,
     }
     local explosions = MCITEM.Explosions
     local resistance = explosions and isfunction(explosions.GetKnockbackResistance)
@@ -819,9 +780,11 @@ local function launchWindBurstOwner(position, owner, level, multiplier)
     local rawVelocity = Vector(0, 0,
         multiplier * (1 - math.Clamp(tonumber(resistance) or 0, 0, 1))
             * (isfunction(MCITEM.BlockSize) and MCITEM.BlockSize() or 36.5) / TICK_SECONDS)
-    local appliedVelocity = rawVelocity * launchScale
+    local appliedVelocity = MCITEM.WindImpulse.ConvertVelocity(owner,
+        rawVelocity + Vector(0, 0, 0.01 * MCITEM.BlockSize() * 20))
+    local fallState = MCITEM.WindImpulse.FallOrigins[owner]
+    if fallState then fallState.graceUntil = CurTime() end
 
-    if isfunction(owner.SetGroundEntity) then owner:SetGroundEntity(NULL) end
     if explosions and isfunction(explosions.ApplyKnockback) then
         explosions.ApplyKnockback(owner, rawVelocity, context)
     elseif isfunction(owner.StartBMBExternalImpulse)
@@ -830,8 +793,8 @@ local function launchWindBurstOwner(position, owner, level, multiplier)
             duration = 0.12,
         }) then
         -- BMB owns its locomotion state and has accepted the additive impulse.
-    elseif owner:IsPlayer() and isfunction(owner.SetVelocity) then
-        owner:SetVelocity(appliedVelocity)
+    elseif owner:IsPlayer() then
+        MCITEM.WindImpulse.QueuePlayerImpulse(owner, appliedVelocity, true)
     elseif isfunction(owner.SetVelocity) then
         owner:SetVelocity(owner:GetVelocity() + appliedVelocity)
     end
@@ -1170,78 +1133,12 @@ hook.Remove("MC.APIReady", "MCITEM.EnchantmentRuntime.Install")
 hook.Add("MC.APIReady", "MCITEM.EnchantmentRuntime.Install", function() Runtime.Install() end)
 
 if SERVER then
-    local function windBurstImpulseState(playerEntity)
-        if not IsValid(playerEntity) or not playerEntity:IsPlayer() then return nil end
-        return Runtime.WindBurstImpulseStates[playerEntity]
+    -- Fall protection is shared with thrown wind charges. Remove the former
+    -- blanket immunity hooks too when this file is refreshed in a running game.
+    for _, event in ipairs({ "GetFallDamage", "OnPlayerHitGround", "SetupMove",
+        "EntityTakeDamage", "PlayerSpawn", "PlayerDeath", "PlayerDisconnected" }) do
+        hook.Remove(event, "MCITEM.Enchantments.WindBurstImpulse")
     end
-
-    local function clearWindBurstImpulse(playerEntity, expected)
-        if Runtime.WindBurstImpulseStates[playerEntity] == expected then
-            Runtime.WindBurstImpulseStates[playerEntity] = nil
-        end
-    end
-
-    local function clearWindBurstImpulseAfterLanding(playerEntity)
-        local state = windBurstImpulseState(playerEntity)
-        if not state or state.clearScheduled then return end
-        state.clearScheduled = true
-        timer.Simple(0, function()
-            if Runtime.WindBurstImpulseStates[playerEntity] ~= state then return end
-            -- A smash can touch a collision surface in the same tick that the
-            -- upward impulse is applied. Only consume the protection once the
-            -- player is still grounded on the following server frame.
-            if IsValid(playerEntity) and not playerEntity:IsOnGround() then
-                state.clearScheduled = nil
-                return
-            end
-            clearWindBurstImpulse(playerEntity, state)
-        end)
-    end
-
-    hook.Remove("GetFallDamage", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("GetFallDamage", "MCITEM.Enchantments.WindBurstImpulse", function(playerEntity)
-        if not windBurstImpulseState(playerEntity) then return end
-        clearWindBurstImpulseAfterLanding(playerEntity)
-        return 0
-    end)
-
-    hook.Remove("OnPlayerHitGround", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("OnPlayerHitGround", "MCITEM.Enchantments.WindBurstImpulse", function(playerEntity)
-        clearWindBurstImpulseAfterLanding(playerEntity)
-    end)
-
-    hook.Remove("SetupMove", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("SetupMove", "MCITEM.Enchantments.WindBurstImpulse", function(playerEntity)
-        local state = windBurstImpulseState(playerEntity)
-        if not state then return end
-        if not playerEntity:IsOnGround() then
-            state.airborne = true
-        elseif state.airborne then
-            clearWindBurstImpulseAfterLanding(playerEntity)
-        end
-    end)
-
-    -- GetFallDamage is the normal Source path. Keep this defensive boundary for
-    -- gamemodes/addons that construct DMG_FALL directly.
-    hook.Remove("EntityTakeDamage", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("EntityTakeDamage", "MCITEM.Enchantments.WindBurstImpulse", function(target, damageInfo)
-        if not windBurstImpulseState(target) or not damageInfo
-            or not damageInfo.IsDamageType or not damageInfo:IsDamageType(DMG_FALL) then return end
-        damageInfo:SetDamage(0)
-        if damageInfo.SetDamageForce then damageInfo:SetDamageForce(vector_origin) end
-        clearWindBurstImpulseAfterLanding(target)
-        return true
-    end)
-
-    local function forgetWindBurstImpulse(playerEntity)
-        Runtime.WindBurstImpulseStates[playerEntity] = nil
-    end
-    hook.Remove("PlayerSpawn", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("PlayerSpawn", "MCITEM.Enchantments.WindBurstImpulse", forgetWindBurstImpulse)
-    hook.Remove("PlayerDeath", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("PlayerDeath", "MCITEM.Enchantments.WindBurstImpulse", forgetWindBurstImpulse)
-    hook.Remove("PlayerDisconnected", "MCITEM.Enchantments.WindBurstImpulse")
-    hook.Add("PlayerDisconnected", "MCITEM.Enchantments.WindBurstImpulse", forgetWindBurstImpulse)
 
     -- MineMod already owns the vanilla 0.2 submerged-mining attribute. Aqua
     -- Affinity sets that attribute to 1.0; it does not remove the airborne /5.

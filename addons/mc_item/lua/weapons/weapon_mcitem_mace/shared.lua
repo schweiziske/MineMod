@@ -191,6 +191,16 @@ end
 function SWEP:MCPostAttack(owner, target, context)
     if not context or not IsValid(owner) or not IsValid(target) then return end
 
+    -- Java 26.2 MaceItem.hurtEnemy resets vertical motion before smash effects
+    -- and Player.itemAttackInteraction's Wind Burst post-attack explosion.
+    -- Commit this with the Wind Burst launch at Source's movement boundary;
+    -- a direct entity velocity write can be lost to an in-flight MoveData.
+    local blockSize = MCITEM.BlockSize()
+    if SERVER then
+        MCITEM.WindImpulse.ResetPlayerVertical(owner, 0.01 * blockSize * 20)
+        MCITEM.WindImpulse.ArmFallProtection(owner, true)
+    end
+
     local fallDistance = context.fallDistance
     local heavy = fallDistance > 5
     local targetOnGround = target.IsOnGround and target:IsOnGround()
@@ -216,7 +226,6 @@ function SWEP:MCPostAttack(owner, target, context)
     -- push() 是**加到现有速度上**，不是覆盖；竖直恒定 0.7 格/tick。
     -- predicate 排除：观察者 / 攻击者本人 / 被砸的目标 / 盟友 / 目标驯服的宠物 /
     -- 标记盔甲架 / 距离平方 > 3.5² / 创造飞行的玩家。
-    local blockSize = MCITEM.BlockSize()
     local radius = 3.5 * blockSize
     local center = target:GetPos()
     local scale = MCITEM.KnockbackScale and MCITEM.KnockbackScale() or 1
@@ -249,9 +258,8 @@ function SWEP:MCPostAttack(owner, target, context)
         end
     end
 
-    -- hurtEnemy sets vertical motion to 0.01 block/tick, then postHurtEnemy resets fallDistance.
-    local velocity = owner:GetVelocity()
-    owner:SetVelocity(Vector(0, 0, -velocity.z + 0.01 * blockSize * 20))
+    -- postHurtEnemy clears the fall distance; enchantment wrappers retain the
+    -- pre-hit value in the attack context for Wind Burst's eligibility check.
     self.MCFallDistance = 0
     self.MCLastFallZ = owner:GetPos().z
 end

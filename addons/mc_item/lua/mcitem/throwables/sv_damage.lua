@@ -511,6 +511,7 @@ function Throwables.TeleportEnderPearlOwner(owner, destination, context)
     end
     local runtime = MCITEM.EnchantmentRuntime
     if runtime and runtime.WindBurstImpulseStates then runtime.WindBurstImpulseStates[owner] = nil end
+    if MCITEM.WindImpulse then MCITEM.WindImpulse.Clear(owner) end
     local physics = MC and MC.BlockPhysics
     local fallState = physics and physics.PlayerState and physics.PlayerState[owner]
     if fallState then
@@ -575,6 +576,8 @@ function Throwables.ExplodeWindCharge(position, projectile, context)
                 damageSource = runtime.damageSource or "minecraft:wind_charge",
                 damageHook = "MCITEM.WindChargeExplosionDamage",
                 knockbackHook = "MCITEM.WindChargeExplosionKnockback",
+                velocityScale = tonumber(context.velocityScale),
+                javaWindImpulse = true,
             },
         })
     end

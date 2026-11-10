@@ -11,8 +11,9 @@ MCITEM = MCITEM or {}
 MCITEM.Explosions = MCITEM.Explosions or {}
 
 local Explosions = MCITEM.Explosions
-if Explosions.CoreVersion == 2 then return end
-Explosions.CoreVersion = 2
+if Explosions.CoreVersion == 3 then return end
+Explosions.CoreVersion = 3
+include("mcitem/explosions/sv_wind_impulse.lua")
 Explosions.CoreLoaded = true
 
 local TRACE_EPSILON = 1e-7
@@ -251,6 +252,20 @@ function Explosions.ApplyKnockback(target, velocity, context)
         if handled ~= nil then return handled ~= false end
     end
 
+    if context and context.javaWindImpulse then
+        local wind = MCITEM.WindImpulse
+        local rawVelocity = velocity
+        if context.resetWindVertical then
+            rawVelocity = Vector(velocity.x, velocity.y,
+                velocity.z + 0.01 * MCITEM.BlockSize() * 20)
+        end
+        velocity = wind.ConvertVelocity(target, rawVelocity, tonumber(context.velocityScale))
+        if target:IsPlayer() then
+            return wind.QueuePlayerImpulse(target, velocity, context.resetWindVertical)
+        end
+        -- Conversion already includes gravity and Java drag for this target.
+        context.velocityScale = 1
+    end
     local scale = tonumber(context and context.velocityScale)
     if scale == nil then
         scale = isfunction(MCITEM.KnockbackScale) and MCITEM.KnockbackScale() or 1
@@ -361,6 +376,10 @@ function Explosions.Explode(configuration)
                     )
                     Explosions.ApplyKnockback(target, velocity, targetContext)
                     affected[#affected + 1] = targetContext
+                end
+                if target:IsPlayer() and context.kind == "wind_charge" then
+                    -- onExplosionHit also runs for zero exposure/resistance.
+                    MCITEM.WindImpulse.ArmFallProtection(target, false)
                 end
             end
         end
