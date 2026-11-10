@@ -67,9 +67,9 @@ end
 
 function Throwables.PlayStandardThrow(entity, eventId)
     if not IsValid(entity) then return false end
-    -- WindChargeItem, EnderpearlItem, SnowballItem, EggItem and
-    -- ExperienceBottleItem all use this exact expression in 26.2.
-    local pitch = 0.4 / (math.Rand(0, 1) * 0.4 + 0.8)
+    -- Java SoundEngine clamps the computed 0.333..0.5 pitch to 0.5.
+    -- Use the audible result for every standard item throw.
+    local pitch = 0.5
     return Throwables.PlaySound(eventId, entity:GetPos(), 0.5, pitch, 75, entity)
 end
 
@@ -79,7 +79,7 @@ function Throwables.PlayEnderEyeLaunch(entity)
         "ender_eye_launch",
         entity:GetPos(),
         1,
-        Lerp(math.Rand(0, 1), 0.33, 0.5),
+        0.5, -- Java SoundEngine minimum pitch also fixes ender-eye launch.
         75,
         entity
     )

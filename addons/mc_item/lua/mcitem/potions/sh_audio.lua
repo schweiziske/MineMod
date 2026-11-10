@@ -38,9 +38,8 @@ function Potions.PlayThrowSound(entity)
     if not IsValid(entity) then return end
     local filename = randomVariant("throw")
     if not filename then return end
-    -- SplashPotionItem/LingeringPotionItem:
-    -- pitch = 0.4 / (random * 0.4 + 0.8), volume = 0.5.
-    local pitch = 0.4 / (math.Rand(0, 1) * 0.4 + 0.8)
+    -- Splash/lingering throws reach Java SoundEngine below its 0.5 minimum.
+    local pitch = 0.5
     entity:EmitSound("mcitem/potions/" .. filename, 75, pitchValue(pitch), 0.5, CHAN_AUTO)
 end
 

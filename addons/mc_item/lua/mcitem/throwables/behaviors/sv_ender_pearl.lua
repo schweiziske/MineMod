@@ -6,11 +6,10 @@ Throwables.RegisterBehavior("ender_pearl", {
     OnHit = function(projectile, trace)
         local target = trace.Entity
         if Throwables.IsProjectileTarget(target) then
-            -- Java's ender_pearl damage type is explicitly tagged
-            -- no_knockback; a pearl striking a living entity must not invoke
-            -- the snowball/egg zero-damage feedback path.
+            -- onHitEntity uses DamageSources.thrown(...), not enderPearl().
+            -- LivingEntity accepts hurt(0); Player.hurtServer rejects it.
             Throwables.ApplyProjectileDamage(projectile, target, 0,
-                "minecraft:ender_pearl", { trace = trace, applyKnockback = false })
+                "minecraft:thrown", { trace = trace, zeroDamageImpact = not target:IsPlayer() })
         end
 
         local particlePosition = trace.HitPos or projectile:GetPos()
@@ -26,18 +25,21 @@ Throwables.RegisterBehavior("ender_pearl", {
 
         local oldPosition = owner:GetPos()
         local oldAngles = owner:GetAngles()
-        if math.Rand(0, 1) < Throwables.EndermiteChance then
+        if owner:IsPlayer() and math.Rand(0, 1) < Throwables.EndermiteChance then
             Throwables.SpawnMCEndermite(oldPosition, oldAngles, owner, context)
         end
         if Throwables.TeleportEnderPearlOwner(owner, destination, context) then
             Throwables.PlayPearlTeleport(destination)
-            Throwables.ApplyProjectileDamage(
-                projectile,
-                owner,
-                Throwables.EnderPearlDamage,
-                "minecraft:ender_pearl",
-                context
-            )
+            -- Java's non-player branch only teleports and resets fall state.
+            if owner:IsPlayer() then
+                Throwables.ApplyProjectileDamage(
+                    projectile,
+                    owner,
+                    Throwables.EnderPearlDamage,
+                    "minecraft:ender_pearl",
+                    context
+                )
+            end
         end
         return true
     end,

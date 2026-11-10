@@ -1,0 +1,10 @@
+// Java 26.2 glitter_7..0; nearest filtering and no mips are encoded in the VTF.
+"UnlitGeneric"
+{
+    "$basetexture" "mcitem/totem/particles"
+    "$translucent" "1"
+    "$vertexcolor" "1"
+    "$vertexalpha" "1"
+    "$nocull" "1"
+    "$no_fullbright" "1"
+}

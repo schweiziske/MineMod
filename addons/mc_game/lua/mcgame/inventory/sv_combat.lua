@@ -583,6 +583,9 @@ local function applyEquipmentCombatDamage( target, damageInfo )
 		end
 	end
 
+	-- Java lastHurt is measured after source modifiers and shield blocking,
+	-- before armor/protection. Expose that snapshot to post-equipment listeners.
+	local damageBeforeArmor = damage
 	local armor, toughness, knockback = 0, 0, 0
 	if record and SV.PlayerEquipmentTotals then armor, toughness, knockback = SV.PlayerEquipmentTotals( record ) end
 	if damage > 0 and armor > 0 and not bypassesArmor( damageInfo ) then
@@ -606,7 +609,7 @@ local function applyEquipmentCombatDamage( target, damageInfo )
 	-- absorption after armor and magic resistance; exposing this boundary keeps
 	-- an addon hook from depending on EntityTakeDamage registration order.
 	damageInfo:SetDamage( math.max( 0, damage ) )
-	hook.Run( "MCITEM.DamageAfterEquipmentMitigation", target, damageInfo, metadata )
+	hook.Run( "MCITEM.DamageAfterEquipmentMitigation", target, damageInfo, metadata, damageBeforeArmor )
 	-- All protection listeners must finish before absorption consumes health.
 	hook.Run( "MCITEM.DamageAfterProtectionMitigation", target, damageInfo, metadata )
 	damage = math.max( 0, tonumber( damageInfo:GetDamage() ) or 0 )

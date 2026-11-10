@@ -26,6 +26,8 @@ Throwables.EnderEyeLifetimeTicks = 80
 Throwables.EnderEyeFarDistance = 12
 Throwables.EnderEyeFarHeight = 8
 Throwables.EnderEyeReturnChance = 0.8
+-- ThrownEnderpearl.onHit: 5 Java health points = 2.5 hearts. ScaleDamage
+-- converts these once to Source HP (25 at the default 20 -> 100 scale).
 Throwables.EnderPearlDamage = 5
 Throwables.EndermiteChance = 0.05
 Throwables.ExperienceOrbLifetimeTicks = 6000

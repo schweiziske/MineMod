@@ -221,6 +221,159 @@ function Throwables.NotifyProjectileLanded(projectile, trace, context)
     return true
 end
 
+local function pearlDamageImmune(target)
+    if not target:IsPlayer() or not target:Alive() then return true end
+    if isfunction(target.HasGodMode) and target:HasGodMode() then return true end
+    if isfunction(target.GetObserverMode) and target:GetObserverMode() ~= (OBS_MODE_NONE or 0) then return true end
+    local mode = isfunction(target.GetNWString) and target:GetNWString("mc_gamemode", "survival") or "survival"
+    if mode == "spectator" then return true end
+    local server = MC and MC.SV
+    if server and isfunction(server.PlayerIsCreative) then
+        return server.PlayerIsCreative(target) == true
+    end
+    if MC and isfunction(MC.PlayerIsCreative) then return MC.PlayerIsCreative(target) == true end
+    return mode == "creative"
+end
+
+-- Only pearls consume this history. Observe MineMod's existing equipment
+-- boundaries without changing the damage/cooldown rules of other weapons.
+-- Amounts here are pre-armor Source HP, not Java points or red-health loss.
+local pearlHurtHistory = setmetatable({}, { __mode = "k" })
+local beforePearlEquipment = setmetatable({}, { __mode = "k" })
+local pendingPearlHurt = setmetatable({}, { __mode = "k" })
+local PEARL_DAMAGE_WINDOW = 10 * Throwables.TickSeconds
+
+local function pearlDamageAfterCooldown(target, amount)
+    local now = CurTime()
+    local previous = pearlHurtHistory[target]
+    local untilTime = previous and previous.untilTime or 0
+    local lastHurt = previous and previous.amount or 0
+    -- Existing zero-damage snowball/egg contacts store a 20-tick timer.
+    -- Java compares only while invulnerableTime > 10, and lastHurt is zero.
+    local impactUntil = (tonumber(target.MCITEMThrowableInvulnerableUntil) or 0) - PEARL_DAMAGE_WINDOW
+    if impactUntil > untilTime then untilTime, lastHurt = impactUntil, 0 end
+    if now < untilTime then
+        if amount <= lastHurt then return 0 end
+        pearlHurtHistory[target] = { untilTime = untilTime, amount = amount }
+        return amount - lastHurt
+    end
+    pearlHurtHistory[target] = { untilTime = now + PEARL_DAMAGE_WINDOW, amount = amount }
+    return amount
+end
+
+hook.Add("MCITEM.DamageBeforeEquipmentMitigation", "MCITEM.Throwables.PearlDamageHistory",
+    function(target, damageInfo, metadata)
+        if not IsValid(target) or pearlDamageImmune(target)
+            or metadata and metadata.damageTypeId == "minecraft:ender_pearl" then return end
+        local potions = MCITEM.Potions
+        local entry = {
+            target = target,
+            damageInfo = damageInfo,
+            amount = math.max(0, damageInfo:GetDamage()),
+            absorption = potions and isfunction(potions.GetAbsorptionAmount)
+                and potions.GetAbsorptionAmount(target) or 0,
+            previous = pendingPearlHurt[target],
+        }
+        beforePearlEquipment[damageInfo] = entry
+        pendingPearlHurt[target] = entry
+    end)
+
+hook.Add("MCITEM.DamageAfterEquipmentMitigation", "MCITEM.Throwables.PearlDamageHistory",
+    function(target, damageInfo, metadata, damageBeforeArmor)
+        if not IsValid(target) or pearlDamageImmune(target)
+            or metadata and metadata.damageTypeId == "minecraft:ender_pearl" then return end
+        local entry = beforePearlEquipment[damageInfo]
+        if not entry and isnumber(damageBeforeArmor) then
+            -- A before listener may have returned a non-nil value without
+            -- cancelling damage. The authoritative post-shield amount still
+            -- permits a history entry before resistance/absorption runs.
+            local potions = MCITEM.Potions
+            entry = {
+                target = target,
+                damageInfo = damageInfo,
+                absorption = potions and isfunction(potions.GetAbsorptionAmount)
+                    and potions.GetAbsorptionAmount(target) or 0,
+                previous = pendingPearlHurt[target],
+            }
+            beforePearlEquipment[damageInfo] = entry
+            pendingPearlHurt[target] = entry
+        end
+        if not entry or entry.target ~= target then return end
+        entry.afterEquipment = true
+        if isnumber(damageBeforeArmor) then
+            -- MineMod captures this AFTER all before hooks and the shield,
+            -- BEFORE armor. Hook iteration order cannot lose Strength/Weakness
+            -- or confuse protection/effect immunity with a shield block.
+            entry.amount = math.max(0, damageBeforeArmor)
+            entry.blocked = entry.amount <= 0
+        else
+            -- Older mc_game has no exact post-modifier snapshot. Keep its
+            -- existing pre-equipment estimate only as a compatibility fallback.
+            entry.blocked = damageInfo:GetDamage() <= 0
+        end
+    end)
+
+hook.Add("PostEntityTakeDamage", "MCITEM.Throwables.PearlDamageHistory",
+    function(target, damageInfo, tookDamage)
+        -- Match by target too: Source may use another DamageInfo wrapper in
+        -- PostEntityTakeDamage. The stack preserves nested hits on one player.
+        local entry = beforePearlEquipment[damageInfo] or pendingPearlHurt[target]
+        if not entry or entry.target ~= target then return end
+        beforePearlEquipment[entry.damageInfo] = nil
+        if pendingPearlHurt[target] == entry then pendingPearlHurt[target] = entry.previous end
+        if not entry.afterEquipment or pearlDamageImmune(target) then return end
+        local potions = MCITEM.Potions
+        local absorbed = potions and isfunction(potions.GetAbsorptionAmount)
+            and potions.GetAbsorptionAmount(target) < entry.absorption
+        local resisted = potions and isfunction(potions.GetResistanceMultiplier)
+            and potions.GetResistanceMultiplier(target) == 0
+        -- Early immunity and later Source cancellation must not create a hurt
+        -- window. Full absorption/Resistance V still counts as a Java hit.
+        if tookDamage ~= true and not absorbed and not resisted and not entry.blocked then return end
+        pearlDamageAfterCooldown(target, entry.blocked and 0 or entry.amount)
+    end)
+
+hook.Add("PlayerSpawn", "MCITEM.Throwables.PearlDamageHistory", function(target)
+    pearlHurtHistory[target] = nil
+    pendingPearlHurt[target] = nil
+    target.MCITEMThrowableInvulnerableUntil = nil
+end)
+
+local function applyPearlTeleportDamage(target, amount, context)
+    local sourceDamage = pearlDamageAfterCooldown(target, MCITEM.ScaleDamage(amount))
+    if sourceDamage <= 0 then return false end
+    local damage = DamageInfo()
+    damage:SetDamage(sourceDamage)
+    -- data/minecraft/tags/damage_type: is_fall, bypasses_armor, no_knockback.
+    -- DMG_FALL also bypasses Source suit armor and MineMod shield durability.
+    damage:SetDamageType(DMG_FALL)
+    -- DamageSources.enderPearl() has no causing/direct entity. In particular,
+    -- the pearl is not an attacker for PvP, Thorns or Projectile Protection.
+    damage:SetAttacker(game.GetWorld())
+    damage:SetInflictor(game.GetWorld())
+    damage:SetDamagePosition(target:GetPos())
+    damage:SetDamageForce(vector_origin)
+    context.damageTypeId = "minecraft:ender_pearl"
+    context.originalDamage = sourceDamage
+
+    local server = MC and MC.SV
+    local hasCombat = server and isfunction(server.GetCombatDamageContext)
+    local pushContext = hasCombat and isfunction(server.PushCombatDamageContext)
+        and isfunction(server.PopCombatDamageContext)
+    if pushContext then server.PushCombatDamageContext(target, damage, context) end
+    local ok, err = pcall(function()
+        if not hasCombat then
+            -- Standalone MCITEM has no MineMod equipment dispatcher. Reuse its
+            -- protection hook here; the potion EntityTakeDamage hook follows.
+            hook.Run("MCITEM.DamageAfterEquipmentMitigation", target, damage, context)
+        end
+        target:TakeDamageInfo(damage)
+    end)
+    if pushContext then server.PopCombatDamageContext(target, damage, context) end
+    if not ok then error(err, 0) end
+    return true
+end
+
 function Throwables.ApplyProjectileDamage(projectile, target, amount, damageSource, context)
     if not IsValid(projectile) or not IsValid(target) or target:IsWorld() then return false end
     amount = math.max(0, tonumber(amount) or 0)
@@ -231,9 +384,14 @@ function Throwables.ApplyProjectileDamage(projectile, target, amount, damageSour
     context.damageSource = damageSource
     context.amount = amount
 
-    -- This must precede every early return below, including BMB's specialized
-    -- zero-damage feedback and the throwable invulnerability window.
-    Throwables.NotifyProjectileEntityHit(projectile, target, amount, damageSource, context)
+    local pearlTeleport = damageSource == "minecraft:ender_pearl"
+    if pearlTeleport then
+        if pearlDamageImmune(target) then return false end
+        context.damageTypeId = damageSource
+    else
+        -- Teleport damage is environmental, not another projectile contact.
+        Throwables.NotifyProjectileEntityHit(projectile, target, amount, damageSource, context)
+    end
 
     -- Snowballs and eggs still enter LivingEntity.hurt with zero damage in
     -- Java. BMB's normal damage iframe would otherwise discard that visual and
@@ -243,7 +401,7 @@ function Throwables.ApplyProjectileDamage(projectile, target, amount, damageSour
         return Throwables.ApplyBMBZeroDamageImpact(projectile, target, context)
     end
 
-    if Throwables.IsThrowableInvulnerable(target, context) then return false end
+    if not pearlTeleport and Throwables.IsThrowableInvulnerable(target, context) then return false end
 
     if isfunction(target.ApplyMCThrowableDamage) then
         local handled = target:ApplyMCThrowableDamage(amount, context.owner, projectile, damageSource, context)
@@ -261,16 +419,16 @@ function Throwables.ApplyProjectileDamage(projectile, target, amount, damageSour
     if handled ~= nil then return handled ~= false end
 
     if amount <= 0 then
-        -- Java's zero-damage LivingEntity.hurt path is intentionally used only
-        -- by snowballs and eggs.  Ender pearls carry the no_knockback damage
-        -- type, and experience bottles do not call hurt on an entity at all;
-        -- their hit merely spawns XP.  Callers opt in explicitly so future
-        -- projectile types cannot accidentally inherit the feedback.
+        -- Snowballs, eggs and pearl entity contacts opt into hurt(0).
+        -- The separate pearl teleport source has no knockback; experience
+        -- bottles do not call hurt at all.
         if context.zeroDamageImpact == true then
             return Throwables.ApplyProjectileImpactFeedback(projectile, target, context)
         end
         return true
     end
+
+    if pearlTeleport then return applyPearlTeleportDamage(target, amount, context) end
 
     local attacker = IsValid(context.owner) and context.owner or game.GetWorld()
     local damage = DamageInfo()
@@ -334,14 +492,32 @@ end
 
 function Throwables.TeleportEnderPearlOwner(owner, destination, context)
     if not IsValid(owner) or not isvector(destination) then return false end
+    local handled
     if isfunction(owner.TeleportFromMCEnderPearl) then
-        local handled = owner:TeleportFromMCEnderPearl(destination, context)
-        if handled ~= nil then return handled ~= false end
+        handled = owner:TeleportFromMCEnderPearl(destination, context)
     end
-    local handled = hook.Run("MCITEM.TeleportEnderPearlOwner", owner, destination, context)
-    if handled ~= nil then return handled ~= false end
-    if owner:IsPlayer() and owner:InVehicle() then owner:ExitVehicle() end
-    owner:SetPos(destination)
+    if handled == nil then
+        handled = hook.Run("MCITEM.TeleportEnderPearlOwner", owner, destination, context)
+    end
+    if handled == false then return false end
+    if handled == nil then
+        if owner:IsPlayer() and owner:InVehicle() then owner:ExitVehicle() end
+        owner:SetPos(destination)
+    end
+    -- ThrownEnderpearl resets fall distance and the current impulse context
+    -- only after successful teleport, preserving delta movement and rotation.
+    if owner:IsPlayer() and isfunction(owner.SetSaveValue) then
+        owner:SetSaveValue("m_flFallVelocity", 0)
+    end
+    local runtime = MCITEM.EnchantmentRuntime
+    if runtime and runtime.WindBurstImpulseStates then runtime.WindBurstImpulseStates[owner] = nil end
+    local physics = MC and MC.BlockPhysics
+    local fallState = physics and physics.PlayerState and physics.PlayerState[owner]
+    if fallState then
+        fallState.fallApexZ = nil
+        fallState.lastFallDistance = nil
+        fallState.lastLandingAt = nil
+    end
     return true
 end
 

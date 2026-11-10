@@ -65,6 +65,8 @@ if SERVER and resource and resource.AddFile then
     for index = 0, 7 do
         resource.AddFile("materials/mcitem/particle/glitter_" .. index .. ".png")
     end
+    resource.AddFile("materials/mcitem/totem/particles.vmt")
+    resource.AddFile("materials/mcitem/totem/particles.vtf")
 end
 
 if SERVER then

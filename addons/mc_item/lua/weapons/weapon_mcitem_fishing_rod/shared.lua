@@ -34,7 +34,7 @@ local FIRST_PERSON_DISPLAY = {
     scale = { 0.68, 0.68, 0.68 },
 }
 
-local function interactionPitch()
+local function retrievalPitch()
     return 0.4 / (math.Rand(0, 1) * 0.4 + 0.8)
 end
 
@@ -119,7 +119,7 @@ function SWEP:CastMCFishingHook(owner)
         "entity.fishing_bobber.throw",
         owner:GetPos(),
         0.5,
-        interactionPitch(),
+        0.5, -- Cast resource pitch is 1; Java clamps the throw to 0.5.
         72
     )
     hook.Run("MCITEM.FishingCast", owner, self, entity, table.Copy(stack))
@@ -134,7 +134,7 @@ function SWEP:RetrieveMCFishingHook(owner, entity)
         "entity.fishing_bobber.retrieve",
         owner:GetPos(),
         1,
-        interactionPitch(),
+        retrievalPitch(),
         72
     )
     hook.Run("MCITEM.FishingRetrieved", owner, self, damage)
