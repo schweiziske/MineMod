@@ -6,6 +6,23 @@ local GMOD_HP_PER_MINECRAFT_HALF_HEART = 5
 local MCITEM_ABSORPTION_NW_KEY = "MCITEMAbsorptionAmount"
 local PLAYER = FindMetaTable and FindMetaTable( "Player" ) or nil
 
+-- Presentation-only equivalent of Java's recent-hurt window. Absorbed damage
+-- opens this window too, but does not by itself start a heart blink.
+if SERVER then
+	local function markHurt( ply )
+		if IsValid( ply ) and ply:IsPlayer() then ply:SetNW2Float( "mc_hud_hurt_until", CurTime() + 1 ) end
+	end
+	hook.Add( "PostEntityTakeDamage", "mc_survival_hud_hurt", function( ply, _, tookDamage )
+		if tookDamage then markHurt( ply ) end
+	end )
+	hook.Add( "MCITEM.AbsorptionChanged", "mc_survival_hud_hurt", function( ply, _, reason )
+		if reason == "damage" then markHurt( ply ) end
+	end )
+	hook.Add( "PlayerSpawn", "mc_survival_hud_hurt", function( ply )
+		ply:SetNW2Float( "mc_hud_hurt_until", 0 )
+	end )
+end
+
 -- Cross-addon health-unit contract. Minecraft health, absorption and damage
 -- are expressed in points where the vanilla player maximum is 20; this game
 -- layer intentionally keeps Source players at 100 HP, hence the fixed 5:1
@@ -38,27 +55,26 @@ function MC.PlayerMinecraftAbsorptionAmount( ply )
 	return 0
 end
 
-function MC.BuildSurvivalHeartLayout( maxHealth, currentHealth, oldHealth, absorption, oldAbsorption )
+function MC.BuildSurvivalHeartLayout( maxHealth, currentHealth, oldHealth, absorption )
 	maxHealth = math.max( 0, tonumber( maxHealth ) or 0 )
 	local currentHalves = MC.GModHealthToMinecraftHalves( currentHealth )
 	local oldHalves = MC.GModHealthToMinecraftHalves( oldHealth )
 	local absorptionHalves = math.ceil( math.max( 0, tonumber( absorption ) or 0 ) )
-	local oldAbsorptionHalves = math.ceil( math.max( 0,
-		oldAbsorption == nil and absorptionHalves or tonumber( oldAbsorption ) or 0 ) )
 	local maxHealthHalves = math.max(
 		maxHealth / GMOD_HP_PER_MINECRAFT_HALF_HEART,
 		currentHalves,
 		oldHalves
 	)
 	local healthContainerCount = math.ceil( maxHealthHalves / 2 )
-	local absorptionContainerCount = math.ceil( math.max( absorptionHalves, oldAbsorptionHalves ) / 2 )
+	-- Hud.extractHearts uses current absorption only: spent/expired gold hearts
+	-- disappear immediately, unlike the one-second history for ordinary health.
+	local absorptionContainerCount = math.ceil( absorptionHalves / 2 )
 	local containerCount = healthContainerCount + absorptionContainerCount
 	local rowCount = math.max( 1, math.ceil( containerCount / 10 ) )
 	return {
 		currentHalves = currentHalves,
 		oldHalves = oldHalves,
 		absorptionHalves = absorptionHalves,
-		oldAbsorptionHalves = oldAbsorptionHalves,
 		maxHealthHalves = maxHealthHalves,
 		maxHealthUnits = maxHealthHalves,
 		healthContainerCount = healthContainerCount,

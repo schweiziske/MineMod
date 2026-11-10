@@ -51,7 +51,11 @@ function Potions.DamageMagic(target, amount, source, context)
     damage:SetInflictor(attacker)
     damage:SetDamagePosition(target:WorldSpaceCenter())
     damage:SetDamageForce(vector_origin)
-    target:TakeDamageInfo(damage)
+    -- Reuse the accepted-hit boundary: absorption counts, immunity does not.
+    local accepted = MCITEM.TakeDamage(target, damage)
+    if accepted and context and context.delivery == "status_tick" and context.effect then
+        hook.Run("MCITEM.PotionPeriodicDamage", target, context.effect.id)
+    end
     return true
 end
 

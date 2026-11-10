@@ -42,6 +42,22 @@ local function isBeneficial(effect)
 	return effect.category == "beneficial"
 end
 
+-- Heart/food appearance follows active effects even when particles or their
+-- status icons are hidden. Read the same snapshot as the existing effect UI.
+function UI.SurvivalHUDEffects(entity)
+	local poisoned, withered, hungry, regenerating = false, false, false, false
+	for _, effect in ipairs(decode(entity)) do
+		local ticks = remainingTicks(effect)
+		if ticks == -1 or ticks > 0 then
+			if effect.id == "poison" then poisoned = true
+			elseif effect.id == "wither" then withered = true
+			elseif effect.id == "hunger" then hungry = true
+			elseif effect.id == "regeneration" then regenerating = true end
+		end
+	end
+	return poisoned, withered, hungry, regenerating
+end
+
 local function sortEffects(effects, reverse, ticksFor)
 	table.sort(effects, function(a, b)
 		local ad = ticksFor and ticksFor(a) or remainingTicks(a)

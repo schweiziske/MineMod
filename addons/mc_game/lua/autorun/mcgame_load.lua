@@ -139,6 +139,7 @@ local SERVER_FILES = {
 local CLIENT_FILES = {
 	"mcgame/item/cl_projectile_lights.lua",
 	"mcgame/generated/cl_generated_gui_sprites.lua",
+	"mcgame/generated/cl_generated_survival_hud_sprites.lua",
 	"mcgame/mining/cl_mining.lua",
 	"mcgame/mining/cl_prediction.lua",
 	"mcgame/mining/cl_hand_swing.lua",
