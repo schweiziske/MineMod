@@ -40,6 +40,8 @@ local function resetTables()
 	Store.LoadQueue = {}
 	Store.EditChunks = {}
 	Store.EditOverlayPath = nil
+	Store.EntitySnapshotBase = false
+	Store.LoadedEntitySnapshots = nil
 	Store.MinRuntimeCZ = nil
 	Store.MaxRuntimeCZ = nil
 	Store.LastError = nil
@@ -569,6 +571,8 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 	Store.Active = true
 	Store.Realm = realm == "GAME" and "GAME" or "DATA"
 	Store.Manifest = manifest
+	Store.EntitySnapshotBase = manifest.entitySnapshots and manifest.entitySnapshots.id or false
+	Store.LoadedEntitySnapshots = manifest.entitySnapshots
 	Store.ManifestPath = cleanDataPath( manifestPath )
 	Store.BaseDir = string.GetPathFromFilename( Store.ManifestPath or "" )
 	Store.Palette = manifest.p or manifest.palette or {}
@@ -613,6 +617,7 @@ function Store.LoadLazyManifest( manifest, manifestPath, realm )
 			return false, registryError or "invalid_overlay_registry_snapshot"
 		end
 		Store.EditChunks = overlay.edits
+		Store.LoadedEntitySnapshots = SV.EntitySnapshotFromOverlay( manifest.entitySnapshots, overlay )
 		local editedCount = tonumber( overlay.blockCount )
 		if editedCount ~= nil then blockCount = math.max( 0, math.floor( editedCount ) ) end
 	end

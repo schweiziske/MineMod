@@ -2155,9 +2155,10 @@ local function overlaySavePath( path )
 	return savePathSibling( path, "_edits.dat" )
 end
 
-local function saveLegacyToPath( path, slotName )
+local function saveLegacyToPath( path, slotName, entitySnapshots )
 	if SV.ChunkStore and SV.ChunkStore.IsLazyWorld and SV.ChunkStore.IsLazyWorld() and SV.ChunkStore.SaveOverlay then
 		local overlay = SV.ChunkStore.SaveOverlay()
+		SV.AttachEntitySnapshotsToOverlay( overlay, entitySnapshots )
 		local json = util.TableToJSON( overlay )
 		if not json then return false, "overlay_json_failed" end
 		ensureSaveDir()
@@ -2174,6 +2175,7 @@ local function saveLegacyToPath( path, slotName )
 
 	local data, chunks, buildError = buildSaveData( slotName )
 	if not data then return false, buildError or "save_encode_failed" end
+	data.entitySnapshots = entitySnapshots
 	local expectedBlocks, countError = reconcileBuiltBlockCount( data, "save" )
 	if not expectedBlocks then return false, countError or "save_count_failed" end
 	local json = util.TableToJSON( data )
@@ -2197,11 +2199,13 @@ local function saveLegacyToPath( path, slotName )
 	return true, path, data, #chunks, expectedBlocks
 end
 
-function SV.SaveToPath( path, slotName )
+function SV.SaveToPath( path, slotName, options )
 	if SV.SaveInProgress then return false, "save_in_progress" end
+	local entitySnapshots, captureError = SV.CaptureEntitySnapshots( options )
+	if not entitySnapshots then return false, captureError end
 	SV.SaveInProgress = true
 	local saveIsDefault = isDefaultSavePath( path )
-	local called, ok, writtenPath, data, chunks, blocks = pcall( saveLegacyToPath, path, slotName )
+	local called, ok, writtenPath, data, chunks, blocks = pcall( saveLegacyToPath, path, slotName, entitySnapshots )
 	SV.SaveInProgress = false
 	if not called then
 		MC.Fault( "legacy_save_exception", "save %s raised: %s", tostring( path ), tostring( ok ) )
@@ -2212,11 +2216,11 @@ function SV.SaveToPath( path, slotName )
 	return ok, writtenPath, data, chunks, blocks
 end
 
-function SV.Save( slotName )
+function SV.Save( slotName, options )
 	if slotName ~= nil and string.Trim( tostring( slotName ) ) ~= "" and SV.SaveNamed then
-		return SV.SaveNamed( slotName )
+		return SV.SaveNamed( slotName, nil, options )
 	end
-	return SV.SaveToPath( savePath() )
+	return SV.SaveToPath( savePath(), nil, options )
 end
 
 local function savedHeightForData( data )
@@ -2513,10 +2517,14 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 	end
 
 	local previousWorld = beginWorldLoadStage()
+	local entitySnapshots
 	local function loadStagedWorld()
 		if lazyStreaming or eagerMCB4 then
 			local loaded, loadError = SV.ChunkStore.LoadLazyManifest( data, path, realm )
 			if not loaded then return false, loadError or "manifest_load_failed" end
+			local entityError
+			entitySnapshots, entityError = SV.ResolveEntitySnapshots( data, path, realm )
+			if not entitySnapshots then return false, entityError end
 			if eagerMCB4 then return SV.ChunkStore.LoadAllChunksEager( true ) end
 			return true
 		end
@@ -2536,12 +2544,26 @@ function SV.LoadFromPath( path, resyncClients, requestedName, realm )
 		return false, loadError or "world_load_failed"
 	end
 
+	if not entitySnapshots then
+		local resolved, prepared, entityError = pcall( SV.ResolveEntitySnapshots, data, path, realm )
+		if not resolved or not prepared then
+			restoreWorldLoadStage( previousWorld )
+			return false, entityError or tostring( prepared )
+		end
+		entitySnapshots = prepared
+	end
+	local stagedEntities, stageEntityError = SV.StageEntitySnapshots( entitySnapshots )
+	if not stagedEntities then
+		restoreWorldLoadStage( previousWorld )
+		return false, stageEntityError
+	end
 	local loadedWorld = captureWorldLoadStage()
 	selectWorldLoadStage( previousWorld )
 	announcePreWorldLoad()
 	selectWorldLoadStage( loadedWorld )
 	commitWorldLoadStage( previousWorld, lazyStreaming or eagerMCB4 )
 	if SV.AdvanceWorldGeneration then SV.AdvanceWorldGeneration( true ) end
+	SV.CommitEntitySnapshots( stagedEntities )
 
 	SV.Dirty = false
 	MsgN( "[MC] loaded " .. SV.BlockCount .. " blocks" ..

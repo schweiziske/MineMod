@@ -27,7 +27,7 @@ local function legacyDefaultPath()
 	return "mc/" .. game.GetMap() .. ".dat"
 end
 
-local function saveLazyOverlay( path, slotName )
+local function saveLazyOverlay( path, slotName, entitySnapshots )
 	local store = SV.ChunkStore
 	if not store or not store.IsLazyWorld or not store.IsLazyWorld() or not store.SaveOverlay then return nil end
 	local activePath = normalizedPath( store.ManifestPath )
@@ -36,6 +36,7 @@ local function saveLazyOverlay( path, slotName )
 		path = activePath
 	end
 	local overlay = store.SaveOverlay()
+	SV.AttachEntitySnapshotsToOverlay( overlay, entitySnapshots )
 	local json = util.TableToJSON( overlay )
 	if not json then return false, "overlay_json_failed" end
 	local overlayPath = store.EditOverlayPath or ( string.GetPathFromFilename( path ) .. "edits.json" )
@@ -46,23 +47,25 @@ local function saveLazyOverlay( path, slotName )
 	return true, path, overlay, 0, SV.BlockCount
 end
 
-local function saveRegionToPath( path, slotName )
-	local lazyResult = { saveLazyOverlay( path, slotName ) }
+local function saveRegionToPath( path, slotName, entitySnapshots )
+	local lazyResult = { saveLazyOverlay( path, slotName, entitySnapshots ) }
 	if lazyResult[1] ~= nil then return unpack( lazyResult ) end
 	if not SV.WriteStateRegionSave then return false, "region_save_codec_unavailable" end
-	local data, chunks, blocks = SV.WriteStateRegionSave( path, slotName )
+	local data, chunks, blocks = SV.WriteStateRegionSave( path, slotName, entitySnapshots )
 	if not data then return false, chunks or "region_save_failed" end
 	MsgN( "[MC] saved " .. chunks .. " chunks / " .. blocks .. " blocks" ..
 		( slotName and ( " as \"" .. slotName .. "\" on map " .. game.GetMap() ) or "" ) )
 	return true, path, data, chunks, blocks
 end
 
-function SV.SaveToPath( path, slotName )
-	if not isRegionManifest( path ) then return legacySaveToPath( path, slotName ) end
+function SV.SaveToPath( path, slotName, options )
+	if not isRegionManifest( path ) then return legacySaveToPath( path, slotName, options ) end
 	if SV.SaveInProgress then return false, "save_in_progress" end
+	local entitySnapshots, captureError = SV.CaptureEntitySnapshots( options )
+	if not entitySnapshots then return false, captureError end
 	SV.SaveInProgress = true
 	local isDefault = string.lower( normalizedPath( path ) ) == string.lower( defaultManifestPath() )
-	local called, ok, writtenPath, data, chunks, blocks = pcall( saveRegionToPath, path, slotName )
+	local called, ok, writtenPath, data, chunks, blocks = pcall( saveRegionToPath, path, slotName, entitySnapshots )
 	SV.SaveInProgress = false
 	if not called then
 		MC.Fault( "region_save_exception", "save %s raised: %s", path, tostring( ok ) )
@@ -80,11 +83,11 @@ function SV.DefaultSavePath()
 	return defaultManifestPath()
 end
 
-function SV.Save( slotName )
+function SV.Save( slotName, options )
 	if slotName ~= nil and string.Trim( tostring( slotName ) ) ~= "" and SV.SaveNamed then
-		return SV.SaveNamed( slotName )
+		return SV.SaveNamed( slotName, nil, options )
 	end
-	return SV.SaveToPath( defaultManifestPath() )
+	return SV.SaveToPath( defaultManifestPath(), nil, options )
 end
 
 function SV.Load()

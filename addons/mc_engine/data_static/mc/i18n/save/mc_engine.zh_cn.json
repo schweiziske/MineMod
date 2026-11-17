@@ -35,6 +35,8 @@
     "title": "MC 存档管理",
     "upload_busy": "截图正在上传，请稍候",
     "upload_failed": "截图上传失败，未执行保存: {err}",
-    "uploading": "正在上传截图和保存存档..."
+    "uploading": "正在上传截图和保存存档...",
+    "save_entities": "保存生物",
+    "save_entities_help": "新建或覆盖存档时，保存当前生物及其武器、交易和持续效果。"
   }
 }

@@ -288,15 +288,18 @@ function MC.RequestSaveList()
 	net.SendToServer()
 end
 
-local function sendSaveActionNow( action, slotName, coverPath )
+local function sendSaveActionNow( action, slotName, coverPath, saveEntities )
 	net.Start( "mc_save_action" )
 		net.WriteString( action )
 		net.WriteString( slotName )
 		net.WriteString( coverPath or "" )
+		net.WriteBool( saveEntities ~= false )
 	net.SendToServer()
 end
 
 local function sendSaveAction( action, slotName, captureCover )
+	local manager = MC.SaveManagerFrame
+	local saveEntities = not IsValid( manager ) or manager.SaveEntities ~= false
 	if ( action == "save" or action == "load" ) and not canUseSaveManager() then
 		setStatus( MC.SaveManagerFrame, MC.Messages.Spec( "save.admin_only" ), true )
 		return
@@ -328,13 +331,13 @@ local function sendSaveAction( action, slotName, captureCover )
 					setStatus( frame, MC.Messages.Spec( "save.upload_failed", { err = tostring( err or "error" ) } ), true )
 					return
 				end
-				sendSaveActionNow( action, slotName, confirmedCover or "" )
+				sendSaveActionNow( action, slotName, confirmedCover or "", saveEntities )
 			end )
 		end )
 		return
 	end
 
-	sendSaveActionNow( action, slotName, "" )
+	sendSaveActionNow( action, slotName, "", saveEntities )
 end
 
 local ROW_HEIGHT = 82
@@ -401,6 +404,7 @@ function MC.OpenSaveManager( viewState )
 	fr.SourceFilter = viewState and viewState.SourceFilter or "*"
 	fr.SearchText = viewState and viewState.SearchText or ""
 	fr.SelectedSave = viewState and viewState.SelectedSave or nil
+	fr.SaveEntities = not viewState or viewState.SaveEntities ~= false
 	fr.Paint = function( _, w, h )
 		surface.SetDrawColor( UI.frame )
 		surface.DrawRect( 0, 0, w, h )
@@ -516,7 +520,10 @@ function MC.OpenSaveManager( viewState )
 
 	fr.CenterPane = vgui.Create( "DPanel", body )
 	fr.CenterPane:Dock( LEFT )
-	fr.CenterPane:SetWide( 360 )
+	surface.SetFont( "mc_library_section" )
+	local saveEntitiesTextWidth = surface.GetTextSize( L( "save.save_entities" ) )
+	local rightWidth = math.max( 480, 338 + 38 + saveEntitiesTextWidth + 24 )
+	fr.CenterPane:SetWide( math.min( 360, frameW - 24 - 230 - rightWidth ) )
 	fr.CenterPane:DockMargin( 0, 0, 10, 0 )
 	fr.CenterPane.Paint = function( _, w, h )
 		surface.SetDrawColor( UI.panel )
@@ -689,6 +696,36 @@ function MC.OpenSaveManager( viewState )
 		end
 	end
 
+	local saveEntities = vgui.Create( "DCheckBox", actions )
+	saveEntities:SetSize( 30, 30 )
+	saveEntities:SetValue( fr.SaveEntities and 1 or 0 )
+	saveEntities:SetTooltip( L( "save.save_entities_help" ) )
+	saveEntities.OnChange = function( _, checked ) fr.SaveEntities = checked end
+	saveEntities.Paint = function( s, w, h )
+		surface.SetDrawColor( s:GetChecked() and ( s:IsEnabled() and UI.accent or UI.accentSoft ) or UI.input )
+		surface.DrawRect( 0, 0, w, h )
+		surface.SetDrawColor( UI.border )
+		surface.DrawOutlinedRect( 0, 0, w, h )
+		if s:GetChecked() then
+			surface.SetDrawColor( UI.text )
+			for dy = 0, 1 do
+				surface.DrawLine( 7, 15 + dy, 12, 20 + dy )
+				surface.DrawLine( 12, 20 + dy, 23, 9 + dy )
+			end
+		end
+	end
+	local saveEntitiesLabel = vgui.Create( "DLabel", actions )
+	saveEntitiesLabel:SetFont( "mc_library_section" )
+	saveEntitiesLabel:SetText( L( "save.save_entities" ) )
+	saveEntitiesLabel:SetTextColor( UI.textDim )
+	saveEntitiesLabel:SetTooltip( L( "save.save_entities_help" ) )
+	saveEntitiesLabel:SetMouseInputEnabled( true )
+	saveEntitiesLabel:SetCursor( "hand" )
+	saveEntitiesLabel.OnMousePressed = function( _, button )
+		if button == MOUSE_LEFT and saveEntities:IsEnabled() then saveEntities:Toggle() end
+	end
+	fr.SaveEntitiesCheckBox = saveEntities
+
 	local publishWorkshop = vgui.Create( "DButton", actions )
 	styleButton( publishWorkshop, L( "workshop.publish" ) )
 	publishWorkshop:SetTooltip( canManageWorkshop()
@@ -745,8 +782,14 @@ function MC.OpenSaveManager( viewState )
 		overwrite:SetSize( 134, 30 )
 		if IsValid( delete ) then
 			delete:SetPos( 238, 6 )
-			delete:SetSize( math.max( 72, math.min( 92, w - 238 ) ), 30 )
+			delete:SetSize( 92, 30 )
 		end
+		local checkX = IsValid( delete ) and 338 or 238
+		-- The original manager supports a 1020 px window. Keep the new control
+		-- after Delete on that row, borrowing list width when space is tight.
+		saveEntities:SetPos( checkX, 6 )
+		saveEntitiesLabel:SetPos( checkX + 38, 6 )
+		saveEntitiesLabel:SetSize( math.max( 0, w - checkX - 38 ), 30 )
 		publishWorkshop:SetPos( 0, 46 )
 		publishWorkshop:SetSize( math.min( 166, math.max( 132, w * 0.54 ) ), 30 )
 		viewWorkshop:SetPos( publishWorkshop:GetWide() + 8, 46 )
@@ -788,6 +831,7 @@ function MC.OpenSaveManager( viewState )
 		if IsValid( groupCombo ) then groupCombo:SetEnabled( save ~= nil and not busy ) end
 		if IsValid( importWorkshop ) then importWorkshop:SetEnabled( workshopAllowed and not busy ) end
 		if IsValid( saveNew ) then saveNew:SetEnabled( canManage and not busy ) end
+		saveEntities:SetEnabled( canManage and not busy and not self.UploadBusy )
 	end
 
 	function fr:SetWorkshopPending( pending )
@@ -1095,6 +1139,7 @@ if MC.RegisterLanguageChanged then
 				MapFilter = frame.MapFilter, GroupFilter = frame.GroupFilter,
 				SourceFilter = frame.SourceFilter, SearchText = frame.SearchText,
 				SelectedSave = frame.SelectedSave, NameText = frame.NameEntry:GetValue(),
+				SaveEntities = frame.SaveEntities,
 				StatusSpec = frame.StatusSpec, StatusIsError = frame.StatusIsError,
 			} )
 		end

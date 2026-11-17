@@ -866,10 +866,16 @@ local Saves = API.Saves
 -- name nil -> default per-map save; otherwise a named slot.
 -- Returns only ok, pathOrErr: the internal call also returns the raw save
 -- payload (live storage on lazy worlds), which must not leak to callers.
-function Saves.Save( name )
+function Saves.RegisterEntityProvider( id, provider )
+	local sv = SV()
+	if not sv or not sv.RegisterEntitySnapshotProvider then return false, "saves_api_unavailable" end
+	return sv.RegisterEntitySnapshotProvider( id, provider )
+end
+
+function Saves.Save( name, options )
 	local sv = SV()
 	if not sv or not sv.Save then return false, "saves_api_unavailable" end
-	local ok, pathOrErr = sv.Save( name )
+	local ok, pathOrErr = sv.Save( name, options )
 	return ok, pathOrErr
 end
 

@@ -250,7 +250,7 @@ See [localization.md](localization.md) for I18n queries, count variants, notific
 
 | Namespace | Calls and semantics |
 | --- | --- |
-| `Saves` | Save(name): ok,pathOrErr, with nil for the map default; Load(name,resync), Delete(name), Exists(name), List(). List scans disk; do not poll. |
+| `Saves` | Save(name,options): ok,pathOrErr, with nil for the map default; options.saveEntities defaults to true. Load(name,resync), Delete(name), Exists(name), List(). List scans disk; do not poll. RegisterEntityProvider(id,provider) registers addon-owned mob persistence. |
 | `Presets` | List(), Get(name), Place(ply,name,origin,opts), SaveFromWorld(name,cornerA,cornerB,anchor,ply), Delete(name). Cells: bx/by/bz or three-element arrays; rotation 0..3, opts.overwrite boolean. Nil ply bypasses player gates and is trusted-code-only. |
 | `Cluster` | Capture(x1,y1,z1,x2,y2,z2) returns a non-air record. Spawn(record,pos,opts): entity or nil,err,convexCount; pos is engine space; opts: angles/frozen/owner. PlaceBack(ply,ent,targetMin,rotation), Break(ent,attacker). |
 | `Schedule` | BlockTick(bx,by,bz,delayTicks,expectedStateId,options) at 20 TPS; BlockUpdate(bx,by,bz); CancelBlockTick(bx,by,bz) cancels all pending types at that cell, regardless of owner. |
@@ -259,6 +259,19 @@ See [localization.md](localization.md) for I18n queries, count variants, notific
 | `Redstone` | Pulse(bx,by,bz,power,durationTicks), for targets or lightning rods. |
 | `DayCycle`, `GameMode` | SetTicks(ticks), modulo 24000; Set(ply,mode,actor). |
 | `Liquid` | PickupSource(ply), PlaceSource(ply,kind), water/lava. Success returns a result record. On inventory transaction failure call RollbackPickup/Placement(ply,result); after completion call CommitPickup/Placement(ply,result) to emit events. |
+
+### Mob snapshot providers (SV)
+
+Register once during addon initialization with `MC.API.Saves.RegisterEntityProvider(id, provider)`. The stable string ID identifies the addon schema; `provider.version` is a positive integer. Saves embed the payload in the same legacy file, region manifest or lazy edit overlay as the block world. Providers are invoked only on save/load, without a new per-tick scan.
+
+- `capture()` returns a plain JSON-compatible tree or `nil, err`. Do not include entity pointers, userdata, metatables, behavior threads or paths. Store remaining timers and stable references; the engine checks finite values, depth and size.
+- `validate(data)` returns `true` or `false, err` and must not mutate the world. It is called on capture and before loading.
+- `stage(data)` runs against the staged block world and returns `{ commit = function, rollback = function }` or `nil, err`. Prepare all new entities and restored attributes synchronously, keeping the outgoing population intact. If staging raises or returns an error, the provider must clean up its own partially created entities. The engine rolls back earlier providers and restores the outgoing block world.
+- `rollback()` removes only newly prepared state and must be safe to invoke before commit. `commit()` performs the prepared replacement after the block world commits and must not fail or perform new validation. Both callbacks must finish synchronously. Transaction guarantees cover preparation failures; exceptions from addon world-load listeners or commit callbacks are programming errors.
+
+An enabled snapshot with an empty provider population can clear that provider's current population. A disabled snapshot or an older save without a snapshot does not invoke providers. Unavailable providers are reported and skipped; installed providers with incompatible versions or invalid data reject the load. Register before the default save loads on `InitPostEntity`.
+
+With `mc_item` installed, `MCITEM.Potions.ExportPersistentState(target, encodeSource)`, `ValidatePersistentState(data)` and `RestorePersistentState(target, data, resolveSource)` expose native potion persistence. Source callbacks convert entities to/from plain references. The payload includes remaining ticks, hidden effects, infinite periodic phase and current absorption. Restoration rebuilds authoritative instances and network state without applying instant effects or granting absorption again. BMB persists its own handled effects through its status API.
 
 ## Client presentation and lighting (CL)
 

@@ -343,6 +343,81 @@ function Potions.ClearEffects(target, reason)
     return true
 end
 
+-- Save the authoritative instances, including hidden weaker effects, rather
+-- than the client-facing icon projection or absolute CurTime deadlines.
+local function persistentInstance(effect, encodeSource)
+    if not effect then return nil end
+    return {
+        id = effect.id, durationTicks = effect.durationTicks,
+        amplifier = effect.amplifier, ambient = effect.ambient == true,
+        visible = effect.visible ~= false, showIcon = effect.showIcon ~= false,
+        source = encodeSource and encodeSource(effect.source) or nil,
+        periodicTick = effect.durationTicks == -1 and (Potions.StatusTick + (effect.persistentTickOffset or 0)) or nil,
+        hidden = persistentInstance(effect.hidden, encodeSource),
+    }
+end
+
+function Potions.ExportPersistentState(target, encodeSource)
+    local result = { version = 1, effects = {}, absorption = Potions.GetAbsorptionAmount(target) }
+    for id, effect in pairs(effectsFor(target, false) or {}) do
+        result.effects[id] = persistentInstance(effect, encodeSource)
+    end
+    return result
+end
+
+local function finite(value)
+    return isnumber(value) and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function validatePersistentInstance(effect, depth, effectId)
+    if not istable(effect) or depth > 16 then return false end
+    local spec = Potions.CopyEffectSpec(effect)
+    if not spec or spec.id ~= effect.id or effect.id ~= effectId
+        or not Potions.EffectDefinition(effect.id) or Potions.IsInstantEffect(effect.id)
+        or not finite(effect.durationTicks)
+        or effect.durationTicks == 0 or effect.durationTicks < -1
+        or effect.durationTicks ~= math.floor(effect.durationTicks)
+        or not finite(effect.amplifier) or effect.amplifier < 0 or effect.amplifier > 255
+        or effect.amplifier ~= math.floor(effect.amplifier)
+        or not isbool(effect.ambient) or not isbool(effect.visible) or not isbool(effect.showIcon)
+        or (effect.periodicTick ~= nil and (not finite(effect.periodicTick)
+            or effect.periodicTick ~= math.floor(effect.periodicTick))) then return false end
+    return effect.hidden == nil or validatePersistentInstance(effect.hidden, depth + 1, effectId)
+end
+
+function Potions.ValidatePersistentState(data)
+    if not istable(data) or data.version ~= 1 or not istable(data.effects)
+        or not finite(data.absorption) or data.absorption < 0 then return false, "invalid_potion_state" end
+    for id, effect in pairs(data.effects) do
+        if not validatePersistentInstance(effect, 0, id) then return false, "invalid_saved_effect" end
+    end
+    return true
+end
+
+local function restorePersistentInstance(effect, resolveSource)
+    local result = Potions.CopyEffectSpec(effect)
+    result.source = resolveSource and resolveSource(effect.source) or nil
+    result.context = { delivery = "world_restore" }
+    result.persistentTickOffset = effect.periodicTick and effect.periodicTick - Potions.StatusTick or nil
+    result.hidden = effect.hidden and restorePersistentInstance(effect.hidden, resolveSource) or nil
+    return result
+end
+
+function Potions.RestorePersistentState(target, data, resolveSource)
+    if not Potions.IsLivingTarget(target) then return false, "invalid_potion_target" end
+    local valid, err = Potions.ValidatePersistentState(data)
+    if not valid then return false, err end
+    Potions.ClearEffects(target, "world_restore")
+    local effects = effectsFor(target, true)
+    for id, effect in pairs(data.effects) do
+        effects[id] = restorePersistentInstance(effect, resolveSource)
+    end
+    if next(effects) then Potions.Tracked[target] = true end
+    Potions.SetAbsorptionAmount(target, data.absorption, "world_restore")
+    syncTarget(target)
+    return true
+end
+
 local function tickHidden(effect)
     if not effect then return nil end
     effect.hidden = tickHidden(effect.hidden)
@@ -356,7 +431,7 @@ local function applyPeriodicEffect(target, effect)
     local amplifier = effect.amplifier or 0
     local tick = effect.durationTicks
     if isInfinite(effect) then
-        tick = Potions.StatusTick
+        tick = Potions.StatusTick + (effect.persistentTickOffset or 0)
     end
     if effect.id == "poison" then
         local interval = math.max(bit.rshift(25, amplifier), 1)

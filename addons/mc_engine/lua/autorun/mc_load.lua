@@ -96,6 +96,7 @@ local SHARED = {
 }
 local SERVER_FILES = {
 	"mc/sv_world.lua",
+	"mc/state/sv_entity_snapshots.lua",
 	"mc/sv_game_mode.lua",
 	"mc/creative/sv_state_selection.lua",
 	"mc/state/sv_save_codec.lua",

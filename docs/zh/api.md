@@ -290,7 +290,7 @@ Commit(plan,transaction,snapshots,radius,options)，输入为公开快照。
 
 | 命名空间 | 调用 |
 | --- | --- |
-| `Saves` | `Save(name)` 返回 ok,pathOrErr，nil 为当前地图默认存档；`Load(name,resync)`、`Delete(name)`、`Exists(name)`、`List()`。List 扫磁盘，不轮询。 |
+| `Saves` | `Save(name,options)` 返回 ok,pathOrErr，nil 为当前地图默认存档；options.saveEntities 默认 true。`Load(name,resync)`、`Delete(name)`、`Exists(name)`、`List()`。List 扫磁盘，不轮询。`RegisterEntityProvider(id,provider)` 注册插件自己的生物持久化适配器。 |
 | `Presets` | `List()`、`Get(name)`、`Place(ply,name,origin,opts)`、`SaveFromWorld(name,cornerA,cornerB,anchor,ply)`、`Delete(name)`；格子用 bx/by/bz 或三元素数组，rotation 为 0..3，opts.overwrite 布尔。nil ply 可绕过玩家门控，仅供可信代码。 |
 | `Cluster` | `Capture(x1,y1,z1,x2,y2,z2)` 返回非空气记录；`Spawn(record,pos,opts)` 返回实体或 nil,err,convexCount，pos 为引擎位置，opts 为 angles/frozen/owner；`PlaceBack(ply,ent,targetMin,rotation)`、`Break(ent,attacker)`。 |
 | `Schedule` | `BlockTick(bx,by,bz,delayTicks,expectedStateId,options)`（20 TPS）；`BlockUpdate(bx,by,bz)`；`CancelBlockTick(bx,by,bz)` 取消该格所有待执行类型，不按 owner 区分。 |
@@ -299,6 +299,19 @@ Commit(plan,transaction,snapshots,radius,options)，输入为公开快照。
 | `Redstone` | `Pulse(bx,by,bz,power,durationTicks)`，作用于 target 或 lightning rod。 |
 | `DayCycle`、`GameMode` | `SetTicks(ticks)`（取模 24000）；`Set(ply,mode,actor)`。 |
 | `Liquid` | `PickupSource(ply)`、`PlaceSource(ply,kind)`（water/lava）；成功返回结果记录，库存事务失败后调用 RollbackPickup/Placement(ply,result)，完成后调用 CommitPickup/Placement(ply,result) 发出事件。 |
+
+### 生物快照适配器（SV）
+
+插件初始化时调用 `MC.API.Saves.RegisterEntityProvider(id, provider)` 注册。稳定的字符串 ID 标识插件的数据格式，`provider.version` 为正整数。数据直接嵌入原来的旧格式文件、region manifest 或懒加载编辑覆盖层，只在保存和读取时调用，不增加每 tick 的遍历。
+
+- `capture()` 返回可编码为 JSON 的普通数据树，或 `nil, err`。不能包含实体指针、userdata、metatable、行为协程或路径；时间保存剩余量，引用保存稳定标识。引擎检查有限数值、深度和大小。
+- `validate(data)` 返回 `true` 或 `false, err`，不能修改世界；保存采集后和读取前均会调用。
+- `stage(data)` 面向暂存的方块世界，返回 `{ commit = function, rollback = function }` 或 `nil, err`。同步准备所有新实体及恢复后的属性，保留原来的生物集合。准备时抛错或返回失败，适配器必须清理自己已经创建的部分实体；引擎回滚此前准备的适配器并恢复原方块世界。
+- `rollback()` 只撤销新准备的状态，应能在提交前安全调用。`commit()` 在方块世界提交后执行已准备好的替换，不得失败或再做新的数据校验。两个回调都必须同步结束。事务保证覆盖准备阶段的失败；插件世界读取事件或 commit 回调抛错属于编程错误。
+
+启用快照但某适配器保存的集合为空时，可以清空该适配器当前的生物。未勾选或没有快照的旧档不调用适配器。缺少适配器会提示并跳过；已安装适配器版本不兼容或数据无效时终止读取。应在 `InitPostEntity` 自动读取默认档之前完成注册。
+
+安装 `mc_item` 后，可用 `MCITEM.Potions.ExportPersistentState(target, encodeSource)`、`ValidatePersistentState(data)`、`RestorePersistentState(target, data, resolveSource)` 保存原生药水状态。source 回调在实体与普通引用之间转换。数据包含剩余 tick、隐藏效果链、无限效果的周期进度和当前伤害吸收量。恢复直接重建权威实例并同步网络状态，不再次施放瞬间效果或再次给予伤害吸收量。BMB 自己处理的效果使用其状态 API 保存。
 
 ## 客户端显示与光照（CL）
 

@@ -43,7 +43,7 @@
     "category.full_sync.label": "全量同步",
     "category.height_shadow.description": "高度场阴影技术使用的俯视高度缓存。",
     "category.height_shadow.label": "高度场阴影",
-    "category.home.description": "在这里打开存档管理器和材质包管理器。",
+    "category.home.description": "打开存档和材质包管理器、选择游戏模式或清理散落物品。",
     "category.home.label": "首页",
     "category.http_delivery.description": "可选地通过 HTTP 主机传输懒加载存档的基础区块。",
     "category.http_delivery.label": "HTTP 区块传输",
@@ -509,6 +509,12 @@
     "unit.s": "秒",
     "unit.scale": "倍",
     "unit.texels": "纹素",
-    "unit.u": "Source 单位"
+    "unit.u": "Source 单位",
+    "setting.mc_cleanup_drops.label": "清除掉落物和经验球",
+    "setting.mc_cleanup_drops.help": "清除当前世界所有散落物品和经验球。玩家背包和已有经验不受影响。",
+    "cleanup.button": "全部清除",
+    "cleanup.admin_only": "仅服务器管理员可以清除掉落物和经验球。",
+    "cleanup.confirm": "是否清除当前世界所有掉落物和经验球？",
+    "cleanup.done": "已清除 {items} 个掉落物和 {orbs} 个经验球。"
   }
 }

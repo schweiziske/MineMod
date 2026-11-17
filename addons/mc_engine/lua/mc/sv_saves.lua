@@ -389,7 +389,7 @@ function SV.UpdateSaveWorkshopMetadata( slotName, workshopId, contentHash, owner
 	return SV.WriteSaveMetaTable( slotName, meta, path )
 end
 
-function SV.SaveNamed( slotName, cover )
+function SV.SaveNamed( slotName, cover, options )
 	if mountedPackageFromKey( slotName ) then return false, "mounted_save_read_only" end
 	slotName = SV.SaveSlotName( slotName )
 	if not slotName then return false, "missing_save_name" end
@@ -398,7 +398,7 @@ function SV.SaveNamed( slotName, cover )
 	if resolved and resolved.source == "mounted" then return false, "mounted_save_read_only" end
 	local source = resolved and resolved.source or "local"
 	local targetPath = resolved and not resolved.legacy and resolved.path or SV.SaveSlotPath( slotName )
-	local ok, path, data, chunks, blocks = SV.SaveToPath( targetPath, slotName )
+	local ok, path, data, chunks, blocks = SV.SaveToPath( targetPath, slotName, options )
 	if ok then writeSaveMeta( slotName, path, data, chunks, blocks, cover, source ) end
 	return ok, path
 end
@@ -752,13 +752,19 @@ net.Receive( "mc_save_list_req", function( _, ply )
 	sendSaveList( ply )
 end )
 
-net.Receive( "mc_save_action", function( _, ply )
+net.Receive( "mc_save_action", function( length, ply )
 	local action = string.lower( net.ReadString() or "" )
 	local slotName = net.ReadString()
 	local cover = ""
-	if net.BytesLeft() > 0 then
+	local remainingBits = length - ( #action + #slotName + 2 ) * 8
+	if remainingBits >= 8 then
 		cover = net.ReadString()
+		remainingBits = remainingBits - ( #cover + 1 ) * 8
 	end
+	local saveEntities = true
+	-- A single BOOL need not occupy a complete byte. Use the payload length,
+	-- excluding transport padding, and keep older clients' default behavior.
+	if remainingBits >= 1 then saveEntities = net.ReadBool() end
 
 	local ok, err
 	if action == "save" then
@@ -766,7 +772,7 @@ net.Receive( "mc_save_action", function( _, ply )
 			sendSaveList( ply, message( "server.save_admin_save" ), true, {} )
 			return
 		end
-		ok, err = SV.SaveNamed( slotName, cover )
+		ok, err = SV.SaveNamed( slotName, cover, { saveEntities = saveEntities } )
 	elseif action == "load" then
 		if not canUseSaves( ply ) then
 			sendSaveList( ply, message( "server.save_admin_load" ), true, {} )

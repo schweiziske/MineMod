@@ -7,10 +7,39 @@ MC = MC or {}
 util.AddNetworkString( "mc_config_set" )
 util.AddNetworkString( "mc_config_get" )
 util.AddNetworkString( "mc_config_values" )
+util.AddNetworkString( "mc_config_cleanup" )
+util.AddNetworkString( "mc_config_cleanup_result" )
 
 local function canSetServerConfig( ply )
 	return IsValid( ply ) and ply:IsAdmin()
 end
+
+-- One explicit admin operation. Remove loose entities without awarding their
+-- contents; normal EntityRemoved listeners retire physics/spatial state.
+local function removeLooseEntities( class )
+	local count = 0
+	for _, entity in ipairs( ents.FindByClass( class ) ) do
+		if IsValid( entity ) and not entity:IsMarkedForDeletion() then
+			entity:Remove()
+			count = count + 1
+		end
+	end
+	return count
+end
+
+net.Receive( "mc_config_cleanup", function( _, ply )
+	local allowed = canSetServerConfig( ply )
+	local items, orbs = 0, 0
+	if allowed then
+		items = removeLooseEntities( "mc_item_drop" )
+		orbs = removeLooseEntities( "mcitem_experience_orb" )
+	end
+	net.Start( "mc_config_cleanup_result" )
+		net.WriteBool( allowed )
+		net.WriteUInt( items, 32 )
+		net.WriteUInt( orbs, 32 )
+	net.Send( ply )
+end )
 
 local function countServerConfigValues()
 	local count = 0

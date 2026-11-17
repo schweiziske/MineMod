@@ -43,7 +43,7 @@
     "category.full_sync.label": "Full-map synchronization",
     "category.height_shadow.description": "Cached top-down height data used by the height shadow technique.",
     "category.height_shadow.label": "Heightfield shadows",
-    "category.home.description": "Open world saves and texture packs from here.",
+    "category.home.description": "Open world and texture pack managers, choose your game mode, or clear loose items.",
     "category.home.label": "Home",
     "category.http_delivery.description": "Optional delivery of lazy-save base chunks through an HTTP host.",
     "category.http_delivery.label": "HTTP chunk delivery",
@@ -510,6 +510,12 @@
     "unit.s": "seconds",
     "unit.scale": "scale",
     "unit.texels": "texels",
-    "unit.u": "Source units"
+    "unit.u": "Source units",
+    "setting.mc_cleanup_drops.label": "Clear dropped items and experience orbs",
+    "setting.mc_cleanup_drops.help": "Remove all loose items and experience orbs in the current world. Player inventories and experience are unchanged.",
+    "cleanup.button": "Clear all",
+    "cleanup.admin_only": "Only server administrators can clear dropped items and experience orbs.",
+    "cleanup.confirm": "Clear all dropped items and experience orbs in the current world?",
+    "cleanup.done": "Cleared {items} dropped items and {orbs} experience orbs."
   }
 }

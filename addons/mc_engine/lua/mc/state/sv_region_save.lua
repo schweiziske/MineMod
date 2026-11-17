@@ -372,7 +372,7 @@ function SV.WriteStateSaveFile( path, data )
 	return true
 end
 
-function SV.WriteStateRegionSave( manifestPath, slotName )
+function SV.WriteStateRegionSave( manifestPath, slotName, entitySnapshots )
 	manifestPath = string.gsub( tostring( manifestPath or "" ), "\\", "/" )
 	local root = string.GetPathFromFilename( manifestPath )
 	if manifestPath == "" or root == "" or not string.EndsWith( manifestPath, "/manifest.json" ) then
@@ -451,6 +451,7 @@ function SV.WriteStateRegionSave( manifestPath, slotName )
 	local persistenceHash = registry and MC.ModRegistrySnapshotHash and MC.ModRegistrySnapshotHash( registry )
 		or MC.GetEffectiveBlockStateRegistryHash and MC.GetEffectiveBlockStateRegistryHash() or nil
 	local manifest = {
+		entitySnapshots = entitySnapshots,
 		v = 10,
 		formatVersion = 10,
 		schemaHash = MC.BlockStateRegistryMetadata and MC.BlockStateRegistryMetadata.schemaHash or nil,

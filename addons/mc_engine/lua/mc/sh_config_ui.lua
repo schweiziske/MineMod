@@ -156,6 +156,7 @@ MC.ConfigConVars = {
 					get = function() return MC.ConfirmedPlayerGameMode() end,
 					set = function( value ) return MC.RequestPlayerGameMode( value ) end,
 				} ),
+				item( "mc_cleanup_drops", "action", { action = "cleanup_drops" } ),
 		} ),
 
 		category( "texture_pack", "interface", {

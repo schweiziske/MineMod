@@ -2,7 +2,7 @@
 
 English | [简体中文](../docs/zh/user/03-saves.md)
 
-A save contains the entire MC block world and its block data. **Loading replaces the current MC world for all players.** It does not change the GMod map or save the entire GMod scene.
+A save contains the entire MC block world and its block data, plus supported mobs when **Save mobs** is selected. **Loading replaces the current MC world for all players.** It does not change the GMod map or save the entire GMod scene.
 
 ## Saving and loading
 
@@ -16,6 +16,12 @@ Enter `mc_save_manager`, or open it from **Interface → Home** in settings.
 | Delete | Select a save, click **Delete**, and confirm; administrators only |
 
 The manager captures a cover image when saving. Saving under an existing name overwrites it. A red map name means the save was created on another GMod map; loading does not change maps for you.
+
+**Save mobs**, beside **Delete**, is checked by default and applies to both creating and overwriting saves. With BlockMob Base installed, it records living BMB mobs, including position, health, age, breeding and pet data, weapons and handedness, and active effects. Villagers keep their profession, variant, level, exact trades and item components, trade usage, reputation and workstation. Effect durations and cooldowns resume from the saved remaining time; instant healing or damage is not repeated.
+
+Loading a save with mob data replaces the current BMB mob population, including clearing it when the saved population is empty. Unchecking the option replaces any previously saved mob snapshot with a block-only save; loading that save, or an older save without mob data, leaves existing mobs in place. Other addons' mobs require their own save provider. Missing providers are reported and skipped, while invalid data for an installed provider stops the load before replacement. Behavior threads, paths, animations, open trading menus, loose item drops and experience orbs are not included.
+
+Console and API saves include supported mobs by default. An API caller can pass `{ saveEntities = false }` to save blocks only. Autosave and shutdown saving retain their existing block-dirty trigger; mob movement alone does not trigger a save.
 
 By default, only administrators may list, save, or load worlds. `mc_save_public 1` grants these actions to ordinary players; deletion remains restricted to administrators.
 

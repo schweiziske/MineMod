@@ -593,6 +593,20 @@ local function createConfigRow( parent, scope, item, rowIndex )
 			if item.action == "save_manager" then MC.OpenSaveManager()
 			else MC.OpenTexturePackManager() end
 		end
+	elseif item.kind == "action" and item.action == "cleanup_drops" then
+		local clean = vgui.Create( "DButton", controls )
+		clean:Dock( FILL )
+		clean:DockMargin( 0, 27, 12, 27 )
+		styleFlatButton( clean, { label = L( "config.cleanup.button" ) } )
+		clean:SetEnabled( IsValid( LocalPlayer() ) and LocalPlayer():IsAdmin() )
+		clean:SetTooltip( L( "config.cleanup.admin_only" ) )
+		clean.DoClick = function()
+			Derma_Query( L( "config.cleanup.confirm" ), itemLabel( item ),
+				L( "config.cleanup.button" ), function()
+					net.Start( "mc_config_cleanup" )
+					net.SendToServer()
+				end, L( "config.ui.cancel" ) )
+		end
 	elseif item.kind == "preset" then
 		createPresetControl( controls )
 	elseif item.kind == "bool" then
@@ -1182,6 +1196,14 @@ end )
 
 concommand.Add( "mc_config", function()
 	MC.OpenConfigMenu()
+end )
+
+net.Receive( "mc_config_cleanup_result", function()
+	local allowed = net.ReadBool()
+	local items, orbs = net.ReadUInt( 32 ), net.ReadUInt( 32 )
+	local text = allowed and L( "config.cleanup.done", { items = items, orbs = orbs } )
+		or L( "config.cleanup.admin_only" )
+	Derma_Message( text, L( "config.setting.mc_cleanup_drops.label" ), "OK" )
 end )
 
 MC.I18n.BindPhrase( "mc.config.desktop_title", "config.ui.desktop_title" )

@@ -35,6 +35,8 @@
     "title": "MC Save Manager",
     "upload_busy": "A screenshot is already uploading",
     "upload_failed": "Screenshot upload failed; save was not created: {err}",
-    "uploading": "Uploading screenshot and saving..."
+    "uploading": "Uploading screenshot and saving...",
+    "save_entities": "Save mobs",
+    "save_entities_help": "Save current mobs, their weapons, trades and active effects when creating or overwriting a save."
   }
 }

@@ -34,13 +34,15 @@ mc_config
 
 | Location | Purpose |
 | --- | --- |
-| Client settings → Interface → Home | Saves, resource pack manager, and game mode |
+| Client settings → Interface → Home | Saves, resource pack manager, game mode, and dropped-item cleanup |
 | Client settings → Interface → Resource packs | Change textures |
 | Client settings → Interface → Shaders | Choose shader packs, presets, and parameters |
 | Client settings → Interface → Language | Chinese, English, or follow GMod |
 | Server settings | Administrator controls for permissions, saves, and world rules |
 
 Use search to find settings. Click **Save** after entering a numeric value. Server settings take effect according to the server's response.
+
+On **Home**, **Clear dropped items and experience orbs → Clear all** removes all loose MC items and experience orbs after confirmation. Only server administrators can use it. The result reports the number removed; player inventories and experience are unaffected.
 
 The default `mc_language auto` follows GMod's language, falling back to English for an unrecognized or unsupported language. You can select `zh_cn` or `en_us` manually. Existing language preferences are retained.
 
