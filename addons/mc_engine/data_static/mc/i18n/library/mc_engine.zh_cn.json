@@ -3,6 +3,7 @@
   "entries": {
     "all": "全部",
     "all_groups": "全部分组",
+    "bundled": "附带",
     "current_map": "当前地图",
     "delete_group": "删除分组",
     "delete_group_hint": "分组会被删除，里面的条目会变成未分组。",
@@ -19,6 +20,7 @@
     "new_group": "新建分组",
     "no_results": "没有符合当前筛选的内容。",
     "preset_subtitle": "收藏并整理可以再次搭建的作品",
+    "presets": "预设",
     "rename_group": "重命名分组",
     "save_subtitle": "整理、筛选并回到你的方块世界",
     "search": "搜索名称或地图",

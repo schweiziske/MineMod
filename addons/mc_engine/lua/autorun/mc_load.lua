@@ -301,6 +301,9 @@ if SERVER then
 	for _, f in ipairs( SHARED ) do AddCSLuaFile( f ) end
 	for _, f in ipairs( CLIENT_FILES ) do AddCSLuaFile( f ) end
 	if resource and resource.AddFile then
+		for _, cover in ipairs( file.Find( "materials/mc/preset_covers/*.jpg", "GAME" ) or {} ) do
+			resource.AddFile( "materials/mc/preset_covers/" .. cover )
+		end
 		-- Mounted assets the world needs without a game layer.
 		-- Pack JSON must also be installed on clients, as with shaderpacks.
 		-- Item icons, container GUI, HUD, mining cracks and their

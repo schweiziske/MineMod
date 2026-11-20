@@ -159,36 +159,12 @@ local function captureSaveCover( slotName, callback )
 	file.CreateDir( "mc" )
 	file.CreateDir( SAVE_COVER_DIR )
 
-	local hookName = "MC_SaveCoverCapture_" .. util.CRC( coverPath .. tostring( SysTime() ) )
-	local timerName = hookName .. "_timeout"
-	local finished = false
-	local function finish( path, data )
-		if finished then return end
-		finished = true
-		hook.Remove( "PostRender", hookName )
-		timer.Remove( timerName )
-		callback( path or "", data )
-	end
-	timer.Create( timerName, 5, 1, function() finish( "", nil ) end )
-	local frames = 0
-	hook.Add( "PostRender", hookName, function()
-		frames = frames + 1
-		if frames < 2 then return end
-
-		local data = render.Capture( {
-			format = "jpeg",
-			quality = 65,
-			x = 0,
-			y = 0,
-			w = ScrW(),
-			h = ScrH(),
-		} )
-		if not data or data == "" then finish( "", nil ) return end
-
-		file.Write( coverPath, data )
-		CoverMaterialCache[coverPath] = nil
-		deleteLocalSaveCovers( slotName, coverPath )
-		finish( coverPath, data )
+	MC.LibraryCaptureCover( coverPath, function( path, data )
+		if data then
+			CoverMaterialCache[coverPath] = nil
+			deleteLocalSaveCovers( slotName, coverPath )
+		end
+		callback( path, data )
 	end )
 end
 

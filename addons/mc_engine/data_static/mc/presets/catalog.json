@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "presets": [
+    {
+      "name": "builtin_natural_medieval_town",
+      "titleKey": "preset.bundled_town",
+      "file": "natural_medieval_town.json",
+      "cover": "mc/preset_covers/natural_medieval_town.jpg",
+      "map": "gm_flatgrass",
+      "blocks": 313632,
+      "size": [
+        375,
+        192,
+        74
+      ],
+      "createdAtText": "2026-11-20 17:24:04",
+      "author": "Hj_rsyxr"
+    }
+  ]
+}

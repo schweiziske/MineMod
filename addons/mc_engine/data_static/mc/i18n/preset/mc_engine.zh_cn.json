@@ -6,6 +6,8 @@
     "aim_place": "请准星对准可以放置预设的位置。",
     "anchor_outside": "基准面必须在刚才选择的范围里。",
     "auto_cover": "保存预设时自动截图",
+    "bundled_town": "自然中世纪小镇",
+    "capture_failed_saved": "截图未成功，预设仍会保存。",
     "create": "新建预设",
     "empty": "还没有预设。输入名字后点“新建预设”。",
     "field_created": "创建",

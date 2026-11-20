@@ -228,6 +228,43 @@ function MC.LibraryItemMatches( item, kind, mapFilter, groupFilter, search )
 	return true
 end
 
+-- A cover is optional. Failed capture/write must finish the save flow once,
+-- and a transient unavailable render target gets a few actual frame retries.
+function MC.LibraryCaptureCover( coverPath, callback )
+	local hookName = "MC_LibraryCover_" .. util.CRC( coverPath .. tostring( SysTime() ) )
+	local timerName = hookName .. "_timeout"
+	local finished, frames, attempts = false, 0, 0
+	local function finish( path, data, reason )
+		if finished then return end
+		finished = true
+		hook.Remove( "PostRender", hookName )
+		timer.Remove( timerName )
+		callback( path or "", data, reason )
+	end
+	timer.Create( timerName, 5, 1, function() finish( "", nil, "timeout" ) end )
+	hook.Add( "PostRender", hookName, function()
+		frames = frames + 1
+		if frames < 2 then return end
+		attempts = attempts + 1
+		local ok, data = pcall( render.Capture, {
+			format = "jpeg", quality = 65, alpha = false,
+			x = 0, y = 0, w = ScrW(), h = ScrH(),
+		} )
+		local valid = ok and type( data ) == "string" and #data >= 4
+			and string.byte( data, 1 ) == 255 and string.byte( data, 2 ) == 216
+		if not valid then
+			if attempts >= 3 then finish( "", nil, "capture_failed" ) end
+			return
+		end
+		local written = pcall( file.Write, coverPath, data )
+		if not written or not file.Exists( coverPath, "DATA" ) or file.Size( coverPath, "DATA" ) ~= #data then
+			finish( "", nil, "write_failed" )
+			return
+		end
+		finish( coverPath, data )
+	end )
+end
+
 function MC.LibraryStyleButton( btn, label, kind, palette )
 	local UI = palette or MC.LibraryUI
 	btn:SetText( "" )

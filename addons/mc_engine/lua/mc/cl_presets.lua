@@ -41,6 +41,11 @@ local function trim( value )
 	return string.Trim( tostring( value or "" ) )
 end
 
+local function presetDisplayName( preset )
+	if preset and preset.titleKey and preset.titleKey ~= "" then return L( preset.titleKey ) end
+	return tostring( preset and preset.name or "" )
+end
+
 local function canUsePresetManager()
 	local ply = LocalPlayer()
 	if not IsValid( ply ) then return false end
@@ -145,6 +150,9 @@ local function requestServerCover( cover )
 	cover = trim( cover )
 	if cover == "" or file.Exists( cover, "DATA" ) or PendingCoverDownloads[cover] then return end
 	PendingCoverDownloads[cover] = true
+	timer.Create( "MC_PresetCoverRequest_" .. util.CRC( cover ), 25, 1, function()
+		PendingCoverDownloads[cover], CoverDownloadBuffers[cover] = nil, nil
+	end )
 	net.Start( "mc_preset_cover_req" )
 		net.WriteString( cover )
 	net.SendToServer()
@@ -153,6 +161,14 @@ end
 local function coverMaterialForPreset( preset )
 	local cover = preset and trim( preset.cover )
 	if not cover or cover == "" then return nil end
+	if preset.bundled and file.Exists( "materials/" .. cover, "GAME" ) then
+		local key = "GAME:" .. cover
+		if CoverMaterialCache[key] then return CoverMaterialCache[key] end
+		local mat = Material( cover, "smooth noclamp" )
+		if not mat or mat:IsError() then return nil end
+		CoverMaterialCache[key] = mat
+		return mat
+	end
 	if not file.Exists( cover, "DATA" ) then
 		requestServerCover( cover )
 		return nil
@@ -189,35 +205,12 @@ local function capturePresetCover( name, callback )
 	file.CreateDir( "mc" )
 	file.CreateDir( PRESET_COVER_DIR )
 
-	local hookName = "MC_PresetCoverCapture_" .. util.CRC( coverPath .. tostring( SysTime() ) )
-	local timerName = hookName .. "_timeout"
-	local finished = false
-	local function finish( path, data )
-		if finished then return end
-		finished = true
-		hook.Remove( "PostRender", hookName )
-		timer.Remove( timerName )
-		callback( path or "", data )
-	end
-	timer.Create( timerName, 5, 1, function() finish( "", nil ) end )
-	local frames = 0
-	hook.Add( "PostRender", hookName, function()
-		frames = frames + 1
-		if frames < 2 then return end
-
-		local data = render.Capture( {
-			format = "jpeg",
-			quality = 65,
-			x = 0,
-			y = 0,
-			w = ScrW(),
-			h = ScrH(),
-		} )
-		if not data or data == "" then finish( "", nil ) return end
-		file.Write( coverPath, data )
-		CoverMaterialCache[coverPath] = nil
-		deleteLocalPresetCovers( name, coverPath )
-		finish( coverPath, data )
+	MC.LibraryCaptureCover( coverPath, function( path, data )
+		if data then
+			CoverMaterialCache[coverPath] = nil
+			deleteLocalPresetCovers( name, coverPath )
+		end
+		callback( path, data )
 	end )
 end
 
@@ -478,7 +471,7 @@ function MC.LoadPresetForProjection( preset )
 	MC.PresetSelection = {}
 	MC.PresetRotation = 0
 	MC.BuildPresetProjectionMesh( preset, MC.PresetRotation )
-	chat( L( "preset.loaded_chat", { name = tostring( preset.name ) } ) )
+	chat( L( "preset.loaded_chat", { name = presetDisplayName( preset ) } ) )
 	return true
 end
 
@@ -549,6 +542,7 @@ local function inSelection( cell, a, b )
 end
 
 function MC.StartPresetCapture( name )
+	if MC.PresetSavePending then return end
 	if not canUsePresetManager() then
 		chat( L( "preset.admin_only" ) )
 		return
@@ -584,6 +578,7 @@ local function sendPresetSave( name, selection, coverPath )
 end
 
 function MC.SavePresetSelection()
+	if MC.PresetSavePending then return end
 	if not canUsePresetManager() then
 		chat( L( "preset.admin_only" ) )
 		return
@@ -595,9 +590,16 @@ function MC.SavePresetSelection()
 		return
 	end
 
+	selection = MC.API.DeepCopy( selection )
+	MC.PresetSavePending = true
+	local function submit( cover )
+		MC.PresetSavePending = false
+		sendPresetSave( name, selection, cover )
+	end
 	MC.PresetSelectionStep = 4
 	chat( L( "preset.saving_chat", { name = name } ) )
 	capturePresetCover( name, function( coverPath, data )
+		if not data then chat( L( "preset.capture_failed_saved" ) ) end
 		uploadPresetCover( name, coverPath, data, function( ok, confirmedCover, err )
 			if not ok then
 				-- 封面只是预览图，不是预设内容。上传失败（too_large / timeout /
@@ -608,10 +610,10 @@ function MC.SavePresetSelection()
 				-- 数据时传空串，uploadPresetCover 会直接 callback( true, "" )。
 				chat( L( "preset.upload_failed_saved",
 					{ err = tostring( err or "error" ) } ) )
-				sendPresetSave( name, selection, "" )
+				submit( "" )
 				return
 			end
-			sendPresetSave( name, selection, confirmedCover or "" )
+			submit( confirmedCover or "" )
 		end )
 	end )
 end
@@ -655,6 +657,7 @@ function MC.PresetAdvanceSelection()
 end
 
 function MC.PresetUndoSelection()
+	if MC.PresetSavePending then return end
 	if MC.PresetMode == "place" and MC.ActivePreset then
 		freePresetProjectionMeshes()
 		MC.ActivePreset = nil
@@ -722,10 +725,11 @@ local function createPresetRow( parent, frame, preset )
 			surface.SetDrawColor( UI.accent )
 			surface.DrawRect( 0, 0, 4, h )
 		end
-		MC.DrawFittedText( preset.name, "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 14, 11, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 160 )
+		MC.DrawFittedText( presetDisplayName( preset ), "mc_hud", { "mc_hud_small", "mc_hud_fit_16" }, 14, 11, UI.text, TEXT_ALIGN_LEFT, TEXT_ALIGN_TOP, w - 160 )
 		draw.SimpleText( tostring( preset.createdAtText or "?" ), "mc_library_section", w - 14, h - 10, UI.textDim, TEXT_ALIGN_RIGHT, TEXT_ALIGN_BOTTOM )
 		local sameMap = preset.map == game.GetMap()
 		local mapW = MC.LibraryDrawPill( tostring( preset.map or "unknown" ), 14, 43, sameMap and UI.accentSoft or Color( 232, 219, 207 ), sameMap and UI.text or UI.error )
+		if preset.bundled then MC.LibraryDrawPill( L( "library.bundled" ), 20 + mapW, 43, UI.accentSoft, UI.text ) end
 		local groupName = MC.LibraryGetGroupName( MC.LibraryGetItemGroup( "preset", preset.name ) )
 		if groupName then
 			surface.SetFont( "mc_library_section" )
@@ -934,7 +938,7 @@ function MC.OpenPresetManager( viewState )
 			return
 		end
 		local sameMap = preset.map == game.GetMap()
-		infoLine( 8, infoY + 32, L( "preset.field_preset" ), preset.name )
+		infoLine( 8, infoY + 32, L( "preset.field_preset" ), presetDisplayName( preset ) )
 		infoLine( 8, infoY + 58, L( "preset.field_map" ), preset.map, sameMap and UI.text or UI.error )
 		infoLine( 8, infoY + 84, L( "preset.field_size" ), string.format( "%d blocks / %dx%dx%d", preset.blocks or 0, preset.sx or 0, preset.sy or 0, preset.sz or 0 ) )
 		infoLine( 8, infoY + 110, L( "preset.field_created" ), preset.createdAtText )
@@ -1076,6 +1080,9 @@ function MC.OpenPresetManager( viewState )
 		if self.GroupFilter ~= "*" and self.GroupFilter ~= "@none" and not MC.LibraryGetGroupName( self.GroupFilter ) then self.GroupFilter = "*" end
 		addFilterHeading( L( "library.maps" ) )
 		addFilterButton( L( "library.all" ), #presets, "*", true )
+		local bundledCount = 0
+		for _, preset in ipairs( presets ) do if preset.bundled then bundledCount = bundledCount + 1 end end
+		addFilterButton( L( "library.presets" ), bundledCount, "@bundled", true )
 		local currentCount = 0
 		for _, preset in ipairs( presets ) do if preset.map == game.GetMap() then currentCount = currentCount + 1 end end
 		addFilterButton( L( "library.current_map" ), currentCount, "@current", true )
@@ -1110,7 +1117,13 @@ function MC.OpenPresetManager( viewState )
 		if not skipFilters then self:RefreshFilters() end
 		local filtered = {}
 		for _, preset in ipairs( presets ) do
-			if MC.LibraryItemMatches( preset, "preset", self.MapFilter, self.GroupFilter, self.SearchText ) then filtered[#filtered + 1] = preset end
+			local sourceMatches = self.MapFilter ~= "@bundled" or preset.bundled == true
+			local search = string.lower( trim( self.SearchText ) )
+			local haystack = string.lower( presetDisplayName( preset ) .. " " .. tostring( preset.name ) .. " " .. tostring( preset.map ) )
+			if sourceMatches and ( search == "" or string.find( haystack, search, 1, true ) )
+				and MC.LibraryItemMatches( preset, "preset", self.MapFilter, self.GroupFilter, "" ) then
+				filtered[#filtered + 1] = preset
+			end
 		end
 		local rowCount = 0
 		local selectedName = self.SelectedPreset and self.SelectedPreset.name
@@ -1164,9 +1177,12 @@ net.Receive( "mc_preset_list_data", function()
 			sz = net.ReadUInt( 16 ),
 			createdAtText = net.ReadString(),
 			cover = net.ReadString(),
+			bundled = net.ReadBool(),
+			titleKey = net.ReadString(),
 		}
 	end
 	MC.PresetManagerPresets = presets
+	if type( message ) == "table" and message.key == "server.preset_save_failed" then MC.PresetSelectionStep = 3 end
 	MC.LibrarySortNewestFirst( MC.PresetManagerPresets, "createdAtText" )
 	if IsValid( MC.PresetManagerFrame ) and MC.PresetManagerFrame.RefreshPresetRows then
 		MC.PresetManagerFrame:RefreshPresetRows( message, isError )
@@ -1232,9 +1248,9 @@ net.Receive( "mc_preset_data_part", function()
 	PresetDataBuffers[name] = nil
 	if #data ~= download.totalBytes then return end
 
-	local json = util.Decompress( data )
-	local preset = json and util.JSONToTable( json ) or nil
-	if not preset then
+	local json = util.Decompress( data, MC.PRESET_MAX_JSON_BYTES )
+	local preset = MC.DecodePresetJSON( json )
+	if not preset or not istable( preset.cells ) then
 		chat( L( "preset.load_damaged" ) )
 		return
 	end
@@ -1277,6 +1293,7 @@ net.Receive( "mc_preset_cover_download_part", function()
 	local data = table.concat( download.parts )
 	CoverDownloadBuffers[cover] = nil
 	PendingCoverDownloads[cover] = nil
+	timer.Remove( "MC_PresetCoverRequest_" .. util.CRC( cover ) )
 	if #data ~= download.totalBytes then return end
 
 	file.CreateDir( "mc" )

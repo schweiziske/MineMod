@@ -3,6 +3,7 @@
   "entries": {
     "all": "All",
     "all_groups": "All groups",
+    "bundled": "Bundled",
     "current_map": "Current map",
     "delete_group": "Delete group",
     "delete_group_hint": "The group will be removed and its items will become ungrouped.",
@@ -19,6 +20,7 @@
     "new_group": "New group",
     "no_results": "Nothing matches the current filters.",
     "preset_subtitle": "Keep build ideas ready to place again",
+    "presets": "Presets",
     "rename_group": "Rename group",
     "save_subtitle": "Organize, filter, and return to your block worlds",
     "search": "Search name or map",

@@ -7,6 +7,15 @@
 
 MC = MC or {}
 
+MC.PRESET_MAX_JSON_BYTES = 32 * 1024 * 1024
+
+function MC.DecodePresetJSON( json )
+	if type( json ) ~= "string" or #json > MC.PRESET_MAX_JSON_BYTES then return nil end
+	-- A preset uses several JSON keys per block, exceeding GMod's default
+	-- 15,000-key limit well before the preset block limit is reached.
+	return util.JSONToTable( json, true )
+end
+
 local function int( value, default )
 	return math.floor( tonumber( value ) or default or 0 )
 end
@@ -190,15 +199,40 @@ function MC.PresetCells( data, origin, rotation )
 	if not data or type( data.cells ) ~= "table" then return out end
 
 	local ox, oy, oz = originXYZ( origin )
+	local specs, rotations, projections = {}, {}, {}
 	for _, cell in ipairs( data.cells ) do
 		local dx = int( cell[1], 0 )
 		local dy = int( cell[2], 0 )
 		local dz = int( cell[3], 0 )
 		local savedId = int( cell[4], 0 )
-		local stateId, stateError = MC.PresetCellState( cell )
-		if stateId then stateId = MC.PresetRotateState( stateId, rotation ) end
+		local spec = cell[6] or cell.state
+		local cacheSpec = type( spec ) == "string" and spec ~= ""
+		local cached = cacheSpec and specs[spec] or nil
+		local stateId, stateError
+		if cached then
+			stateId, stateError = cached[1], cached[2]
+		else
+			stateId, stateError = MC.PresetCellState( cell )
+			if cacheSpec then specs[spec] = { stateId, stateError } end
+		end
+		if stateId then
+			local rotated = rotations[stateId]
+			if rotated == nil then
+				rotated = MC.PresetRotateState( stateId, rotation )
+				rotations[stateId] = rotated
+			end
+			stateId = rotated
+		end
 		local id, orient
-		if stateId and MC.LegacyFromState then id, orient = MC.LegacyFromState( stateId ) end
+		if stateId and MC.LegacyFromState then
+			local projection = projections[stateId]
+			if not projection then
+				id, orient = MC.LegacyFromState( stateId )
+				projection = { id, orient }
+				projections[stateId] = projection
+			end
+			id, orient = projection[1], projection[2]
+		end
 		id = int( id, savedId )
 		orient = orient ~= nil and orient or MC.PresetRotateBlockOrient( id, cell[5], rotation )
 		local tx, ty, tz = MC.PresetRotateLocalCell( data, dx, dy, dz, rotation )
@@ -216,6 +250,21 @@ function MC.PresetCells( data, origin, rotation )
 		}
 	end
 	return out
+end
+
+-- Inclusive block-cell bounds; quarter turns retain an axis-aligned box.
+function MC.PresetBounds( data, origin, rotation )
+	local size = data and data.size or {}
+	local sx, sy, sz = int( size[1], 0 ), int( size[2], 0 ), int( size[3], 0 )
+	if sx < 1 or sy < 1 or sz < 1 then return nil end
+	local ox, oy, oz = originXYZ( origin )
+	local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+	for _, corner in ipairs( { { 0, 0 }, { sx - 1, 0 }, { 0, sy - 1 }, { sx - 1, sy - 1 } } ) do
+		local x, y = MC.PresetRotateLocalCell( data, corner[1], corner[2], 0, rotation )
+		minX, minY = math.min( minX, x ), math.min( minY, y )
+		maxX, maxY = math.max( maxX, x ), math.max( maxY, y )
+	end
+	return ox + minX, oy + minY, oz, ox + maxX, oy + maxY, oz + sz - 1
 end
 
 function MC.PresetClearCells( data, origin, rotation )
@@ -239,4 +288,58 @@ function MC.PresetClearCells( data, origin, rotation )
 		end
 	end
 	return out
+end
+
+local bundledCatalog, bundledCatalogTime
+local BUNDLED_PRESET_ROOT = "data_static/mc/presets/"
+
+-- Mounted addon content, not player DATA. Limits are derived from this
+-- validated catalog only; a saved preset cannot declare itself bundled.
+function MC.GetBundledPresetCatalog()
+	local path = BUNDLED_PRESET_ROOT .. "catalog.json"
+	if not file.Exists( path, "GAME" ) then return {} end
+	local revision = file.Time( path, "GAME" ) or 0
+	if bundledCatalog and bundledCatalogTime == revision then return bundledCatalog end
+	local raw = file.Read( path, "GAME" )
+	local document = raw and util.JSONToTable( raw )
+	if type( document ) ~= "table" or document.v ~= 1 or type( document.presets ) ~= "table" then
+		if MC.Fault then MC.Fault( "bundled_preset_catalog", "Invalid catalog: %s", path ) end
+		return {}
+	end
+	local catalog, seen = {}, {}
+	for _, entry in ipairs( document.presets ) do
+		if type( entry ) ~= "table" then
+			if MC.Fault then MC.Fault( "bundled_preset_catalog", "Invalid entry in %s", path ) end
+			return {}
+		end
+		local size = type( entry.size ) == "table" and entry.size or {}
+		local sx, sy, sz = int( size[1], 0 ), int( size[2], 0 ), int( size[3], 0 )
+		local blocks = int( entry.blocks, 0 )
+		local valid = type( entry.name ) == "string" and #entry.name <= 64
+			and string.match( entry.name, "^builtin_[a-z0-9_%-]+$" ) and not seen[entry.name]
+			and type( entry.file ) == "string" and string.match( entry.file, "^[a-z0-9_%-]+%.json$" )
+			and type( entry.cover ) == "string" and string.match( entry.cover, "^mc/preset_covers/[a-z0-9_%-]+%.jpg$" )
+			and type( entry.titleKey ) == "string" and string.match( entry.titleKey, "^[a-z0-9_%.]+$" )
+			and sx > 0 and sy > 0 and sz > 0 and sx <= 65535 and sy <= 65535 and sz <= 65535
+			and blocks > 0 and blocks <= sx * sy * sz
+		if not valid then
+			if MC.Fault then MC.Fault( "bundled_preset_catalog", "Invalid entry in %s", path ) end
+			return {}
+		end
+		seen[entry.name] = true
+		catalog[#catalog + 1] = {
+			name = entry.name, path = BUNDLED_PRESET_ROOT .. entry.file,
+			cover = entry.cover, titleKey = entry.titleKey, bundled = true,
+			map = entry.map or "unknown", blocks = blocks, size = { sx, sy, sz },
+			volume = sx * sy * sz, createdAtText = entry.createdAtText or "?",
+		}
+	end
+	bundledCatalog, bundledCatalogTime = catalog, revision
+	return catalog
+end
+
+function MC.GetBundledPresetDefinition( name )
+	for _, entry in ipairs( MC.GetBundledPresetCatalog() ) do
+		if entry.name == name then return entry end
+	end
 end

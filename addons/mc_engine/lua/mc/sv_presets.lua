@@ -202,6 +202,7 @@ end
 local function presetPayloadToJSON( data )
 	local json = util.TableToJSON( data )
 	if not json or json == "" then return nil end
+	if #json > MC.PRESET_MAX_JSON_BYTES then return nil, "preset_payload_too_large" end
 	local compressed = util.Compress( json )
 	if not compressed or compressed == "" then return nil end
 	return compressed
@@ -231,33 +232,52 @@ function SV.LoadPreset( presetName )
 	presetName = SV.PresetName( presetName )
 	if not presetName then return nil, "missing_preset_name" end
 
-	local path = SV.PresetPath( presetName )
-	if not file.Exists( path, "DATA" ) then
+	local bundled = MC.GetBundledPresetDefinition( presetName )
+	local path = bundled and bundled.path or SV.PresetPath( presetName )
+	local realm = bundled and "GAME" or "DATA"
+	if not file.Exists( path, realm ) then
 		PresetCache[presetName] = nil
 		return nil, "preset_not_found"
 	end
 
-	local fileTime = file.Time( path, "DATA" ) or 0
+	local fileTime = file.Time( path, realm ) or 0
 	local cached = PresetCache[presetName]
-	if cached and cached.fileTime == fileTime then
+	if cached and cached.fileTime == fileTime and cached.path == path then
 		return cached.data, nil, cached
 	end
 
-	local raw = file.Read( path, "DATA" )
+	local raw = file.Read( path, realm )
 	if not raw or raw == "" then return nil, "empty_preset" end
 	local json = raw
 	local payload = raw
 	if string.sub( raw, 1, 1 ) ~= "{" then
-		json = util.Decompress( raw )
-	else
-		payload = util.Compress( raw )
+		json = util.Decompress( raw, MC.PRESET_MAX_JSON_BYTES )
 	end
 	if not json then return nil, "decompress_failed" end
-	local data = util.JSONToTable( json )
+	local data = MC.DecodePresetJSON( json )
 	if not data or not istable( data.cells ) then return nil, "invalid_preset" end
-	data.name = data.name or presetName
-	data.cover = sanitizePresetCover( data.cover, presetName ) or ""
-	cached = { fileTime = fileTime, data = data, payload = payload }
+	local oldName, oldBundled, oldTitle, oldCover = data.name, data.bundled, data.titleKey, data.cover
+	data.name = presetName
+	if bundled then
+		local size = istable( data.size ) and data.size or {}
+		if #data.cells ~= bundled.blocks or size[1] ~= bundled.size[1]
+			or size[2] ~= bundled.size[2] or size[3] ~= bundled.size[3] then
+			return nil, "bundled_preset_size_mismatch"
+		end
+		data.bundled, data.titleKey, data.cover = true, bundled.titleKey, bundled.cover
+	else
+		data.bundled, data.titleKey = nil, nil
+		data.cover = sanitizePresetCover( data.cover, presetName ) or ""
+	end
+	if oldName ~= data.name or oldBundled ~= data.bundled or oldTitle ~= data.titleKey or oldCover ~= data.cover then
+		local encodeError
+		payload, encodeError = presetPayloadToJSON( data )
+		if not payload then return nil, encodeError or "encode_failed" end
+	elseif json == raw then
+		payload = util.Compress( raw )
+		if not payload then return nil, "encode_failed" end
+	end
+	cached = { fileTime = fileTime, path = path, data = data, payload = payload, bundled = bundled }
 	PresetCache[presetName] = cached
 	return data, nil, cached
 end
@@ -268,32 +288,41 @@ function SV.PresetList()
 	local out = {}
 	for _, fn in ipairs( files ) do
 		local presetName = string.gsub( fn, "%.dat$", "" )
-		local meta = readPresetMeta( presetName )
-		if not meta or not meta.blocks or not meta.size then
-			local data = SV.LoadPreset( presetName )
-			if data then
-				meta = {
-					name = presetName,
-					map = data.map or "unknown",
-					createdAt = data.createdAt,
-					createdAtText = data.createdAtText or "?",
-					blocks = data.blocks or #data.cells,
-					size = data.size,
-					cover = sanitizePresetCover( data.cover, presetName ) or "",
+		if not MC.GetBundledPresetDefinition( presetName ) then
+			local meta = readPresetMeta( presetName )
+			if not meta or not meta.blocks or not meta.size then
+				local data = SV.LoadPreset( presetName )
+				if data then
+					meta = {
+						name = presetName,
+						map = data.map or "unknown",
+						createdAt = data.createdAt,
+						createdAtText = data.createdAtText or "?",
+						blocks = data.blocks or #data.cells,
+						size = data.size,
+						cover = sanitizePresetCover( data.cover, presetName ) or "",
+					}
+					writePresetMeta( presetName, data )
+				end
+			end
+			if meta then
+				out[#out + 1] = {
+					name = meta.name or presetName,
+					map = meta.map or "unknown",
+					createdAtText = meta.createdAtText or "?",
+					blocks = math.floor( tonumber( meta.blocks ) or 0 ),
+					size = meta.size or { 0, 0, 0 },
+					cover = sanitizePresetCover( meta.cover, presetName ) or "",
 				}
-				writePresetMeta( presetName, data )
 			end
 		end
-		if meta then
-			out[#out + 1] = {
-				name = meta.name or presetName,
-				map = meta.map or "unknown",
-				createdAtText = meta.createdAtText or "?",
-				blocks = math.floor( tonumber( meta.blocks ) or 0 ),
-				size = meta.size or { 0, 0, 0 },
-				cover = sanitizePresetCover( meta.cover, presetName ) or "",
-			}
-		end
+	end
+	for _, entry in ipairs( MC.GetBundledPresetCatalog() ) do
+		out[#out + 1] = {
+			name = entry.name, map = entry.map, createdAtText = entry.createdAtText,
+			blocks = entry.blocks, size = entry.size, cover = entry.cover,
+			bundled = true, titleKey = entry.titleKey,
+		}
 	end
 	table.sort( out, function( a, b ) return tostring( a.name ) < tostring( b.name ) end )
 	return out
@@ -304,6 +333,7 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 
 	presetName = SV.PresetName( presetName )
 	if not presetName then return false, "missing_preset_name" end
+	if MC.GetBundledPresetDefinition( presetName ) then return false, "bundled_preset_read_only" end
 	cornerA = asCell( cornerA )
 	cornerB = asCell( cornerB )
 	anchor = asAnchor( anchor )
@@ -362,8 +392,8 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 		rotation = "quarter_turn_z",
 	}
 
-	local compressed = presetPayloadToJSON( data )
-	if not compressed then return false, "encode_failed" end
+	local compressed, encodeError = presetPayloadToJSON( data )
+	if not compressed then return false, encodeError or "encode_failed" end
 	if #compressed > MAX_PRESET_DATA_BYTES then return false, "preset_payload_too_large" end
 
 	file.Write( SV.PresetPath( presetName ), compressed )
@@ -371,6 +401,7 @@ function SV.SavePreset( presetName, cornerA, cornerB, anchor, cover, ply )
 	-- overwrite could otherwise keep serving the stale parsed preset
 	PresetCache[presetName] = {
 		fileTime = file.Time( SV.PresetPath( presetName ), "DATA" ) or 0,
+		path = SV.PresetPath( presetName ),
 		data = data,
 		payload = compressed,
 	}
@@ -386,6 +417,7 @@ end
 function SV.DeletePreset( presetName )
 	presetName = SV.PresetName( presetName )
 	if not presetName then return false, "missing_preset_name" end
+	if MC.GetBundledPresetDefinition( presetName ) then return false, "bundled_preset_read_only" end
 	local path = SV.PresetPath( presetName )
 	if not file.Exists( path, "DATA" ) then return false, "preset_not_found" end
 	file.Delete( path )
@@ -449,11 +481,18 @@ local function presetClearCells( data, origin, rotation )
 	return out
 end
 
-local function validatePresetData( ply, data )
+local function validatePresetData( ply, data, cached )
 	if not canEditPresets( ply ) then return false, "permission" end
 	if not data or not data.anchor then return false, "invalid_preset" end
 	local maxPreset = presetMaxBlocks()
 	local _, _, _, volume = presetSize( data )
+	-- Only the server's GAME-loaded catalog grants this exact-sized exception.
+	if cached and cached.bundled then
+		if volume ~= cached.bundled.volume or #data.cells ~= cached.bundled.blocks then
+			return false, "bundled_preset_size_mismatch"
+		end
+		return true
+	end
 	if maxPreset > 0 and volume > maxPreset then return false, "preset_too_large" end
 	if maxPreset > 0 and #( data.cells or {} ) > maxPreset then return false, "preset_too_large" end
 	return true
@@ -497,18 +536,50 @@ local function presetFinalCells( data, origin, overwrite, rotation )
 		final[#final + 1] = { bx = bx, by = by, bz = bz, stateId = stateId }
 	end
 	for _, cell in ipairs( placed ) do setFinal( cell.bx, cell.by, cell.bz, cell.stateId, false ) end
-	for _, cell in ipairs( presetClearCells( data, origin, rotation ) ) do
-		setFinal( cell.bx, cell.by, cell.bz, 0, true )
+	local minX, minY, minZ, maxX, maxY, maxZ = MC.PresetBounds( data, origin, rotation )
+	if not minX then return nil, "invalid_preset" end
+	local store = SV.ChunkStore
+	local lazy = store and store.IsLazyWorld and store.IsLazyWorld()
+	local function clearExisting( bx, by, bz )
+		if bx >= minX and bx <= maxX and by >= minY and by <= maxY and bz >= minZ and bz <= maxZ then
+			setFinal( bx, by, bz, 0, true )
+		end
+	end
+	-- Clearing already-air cells changes nothing. Walk authoritative occupied
+	-- chunks instead of allocating one table for every cell in the volume.
+	for cz = math.floor( minZ / MC.CH ), math.floor( maxZ / MC.CH ) do
+		for cy = math.floor( minY / MC.CS ), math.floor( maxY / MC.CS ) do
+			for cx = math.floor( minX / MC.CS ), math.floor( maxX / MC.CS ) do
+				local key = MC.ChunkKey( cx, cy, cz )
+				if lazy and not ( store.LoadedKeys and store.LoadedKeys[tostring( key )] ) then
+					local hasBase = store.HasBaseChunk and store.HasBaseChunk( key )
+					local hasEdits = store.HasChunkEdits and store.HasChunkEdits( key )
+					if hasBase or hasEdits then
+						if not store.HydrateChunkNow then return nil, "lazy_chunk_hydrator_unavailable" end
+						store.LastError = nil
+						local _, hydrateError = store.HydrateChunkNow( key, false, true )
+						if hydrateError or store.LastError then return nil, hydrateError or store.LastError end
+					end
+				end
+				local chunk = MC.GetChunk( cx, cy, cz )
+				if chunk then MC.ForEachBlockState( chunk, clearExisting ) end
+			end
+		end
 	end
 	return final
 end
 
-local function validateFinalPresetCells( cells, overwrite )
+local function validateFinalPresetCells( cells, overwrite, ply )
 	local blockDelta = 0
 	for _, cell in ipairs( cells ) do
 		if not worldBoundsOK( cell.bx, cell.by, cell.bz ) then return false, "out_of_bounds" end
 		local oldStateId = MC.GetBlockState( cell.bx, cell.by, cell.bz ) or 0
 		if not overwrite and oldStateId ~= 0 then return false, "occupied" end
+		if IsValid( ply ) and SV.CellEditAllowed
+			and not SV.CellEditAllowed( ply, cell.bx, cell.by, cell.bz, cell.stateId ~= 0,
+				{ action = cell.stateId == 0 and "break" or "place", reason = "preset" } ) then
+			return false, "permission"
+		end
 		if oldStateId == 0 and cell.stateId ~= 0 then blockDelta = blockDelta + 1 end
 		if oldStateId ~= 0 and cell.stateId == 0 then blockDelta = blockDelta - 1 end
 	end
@@ -526,10 +597,10 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 	-- Same coarse gate as every other player edit path (admin convar plus the
 	-- MC.CanPlayerEdit protection veto); console callers skip it.
 	if IsValid( ply ) and SV.CanEdit and not SV.CanEdit( ply ) then return false, "permission" end
-	local data, err = SV.LoadPreset( presetName )
+	local data, err, cached = SV.LoadPreset( presetName )
 	if not data then return false, err end
 
-	local ok, validateErr = validatePresetData( ply, data )
+	local ok, validateErr = validatePresetData( ply, data, cached )
 	if not ok then return false, validateErr end
 	local cells, cellsError = presetFinalCells( data, origin, overwrite, rotation )
 	if not cells then return false, cellsError end
@@ -549,6 +620,11 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 			maxBlockCount = C.MaxBlocks and C.MaxBlocks:GetInt() or 0,
 			validateChange = function( info )
 				if not overwrite and info.oldStateId ~= 0 then return false, "occupied" end
+				if IsValid( ply ) and SV.CellEditAllowed
+					and not SV.CellEditAllowed( ply, info.bx, info.by, info.bz, info.stateId ~= 0,
+						{ action = info.stateId == 0 and "break" or "place", reason = "preset" } ) then
+					return false, "permission"
+				end
 				return true
 			end,
 		} )
@@ -559,7 +635,7 @@ function SV.PlacePreset( ply, presetName, origin, overwrite, rotation )
 		end
 	end
 	if changed == nil and SV.SetBlocksBulk then
-		local valid, fallbackError = validateFinalPresetCells( cells, overwrite )
+		local valid, fallbackError = validateFinalPresetCells( cells, overwrite, ply )
 		if not valid then return false, fallbackError end
 		changed, bulkErr = SV.SetBlocksBulk( cells, {
 			actor = ply,
@@ -599,6 +675,7 @@ local function sendPresetList( ply, message, isError, presets )
 		local preset = presets[index]
 		local rowBytes = 24 + #tostring( preset.name or "" ) + #tostring( preset.map or "unknown" )
 			+ #tostring( preset.createdAtText or "?" ) + #tostring( preset.cover or "" )
+			+ #tostring( preset.titleKey or "" ) + 1
 		if bytes + rowBytes > 60000 then break end
 		bytes, count = bytes + rowBytes, index
 	end
@@ -617,6 +694,8 @@ local function sendPresetList( ply, message, isError, presets )
 			net.WriteUInt( math.Clamp( math.floor( tonumber( size[3] ) or 0 ), 0, 65535 ), 16 )
 			net.WriteString( tostring( preset.createdAtText or "?" ) )
 			net.WriteString( tostring( preset.cover or "" ) )
+			net.WriteBool( preset.bundled == true )
+			net.WriteString( tostring( preset.titleKey or "" ) )
 		end
 	net.Send( ply )
 end
@@ -681,9 +760,14 @@ end
 local function sendPresetCoverToClient( ply, cover )
 	if not IsValid( ply ) then return end
 	cover = sanitizePresetCoverReadPath( cover )
-	if not cover or not file.Exists( cover, "DATA" ) then return end
+	if not cover then return end
+	local path, realm = cover, "DATA"
+	for _, entry in ipairs( MC.GetBundledPresetCatalog() ) do
+		if cover == entry.cover then path, realm = "materials/" .. cover, "GAME" break end
+	end
+	if not file.Exists( path, realm ) then return end
 
-	local data = file.Read( cover, "DATA" )
+	local data = file.Read( path, realm )
 	if not data or data == "" or #data > MAX_PRESET_COVER_BYTES then return end
 
 	local parts = math.ceil( #data / PRESET_COVER_PART_BYTES )

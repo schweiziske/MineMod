@@ -36,3 +36,13 @@ With overwrite disabled, destination cells for preset blocks must be empty; air 
 By default, only administrators may list, save, load, and place presets. `mc_preset_public 1` grants these actions to ordinary players. Placement still follows server editing permissions, world bounds, and block limits.
 
 The reference face and rotation determine projection alignment. Adjust your aim or press G to reposition it. To change the reference face, create the preset again.
+
+## Bundled presets
+
+Under **Saved map**, **Presets** lists the builds shipped with MineMod. They are marked **Bundled** and include Natural Medieval Town with a sealed, one-block lake floor. Choose it and load the projection normally.
+
+Bundled content and covers are mounted from the addon's `data_static/mc/presets/` and `materials/mc/preset_covers/` directories. They travel with the addon when it is published to the Workshop; subscribing to that updated addon downloads them together. Player saves are still stored separately in DATA.
+
+Bundled templates are read-only. The validated catalog permits their declared dimensions and block count without changing `mc_preset_max_blocks` for player captures. Placement still follows administrator/edit permissions, world bounds and the global block limit.
+
+A failed screenshot or cover upload does not discard the selection: the build is saved without a cover. Capture retries temporary render-target failures and reports write failures instead of leaving the save flow stuck.

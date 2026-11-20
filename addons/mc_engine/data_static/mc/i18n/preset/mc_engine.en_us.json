@@ -6,6 +6,8 @@
     "aim_place": "Aim at a valid preset placement position.",
     "anchor_outside": "The anchor face must be inside the selected range.",
     "auto_cover": "Saving a preset will capture one automatically",
+    "bundled_town": "Natural Medieval Town",
+    "capture_failed_saved": "The screenshot could not be captured. The preset will still be saved.",
     "create": "Create Preset",
     "empty": "No presets yet. Enter a name, then click Create Preset.",
     "field_created": "Created",
