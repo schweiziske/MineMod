@@ -89,6 +89,7 @@ local SHARED = {
 	"mc/redstone/sh_piston.lua",
 	"mc/sh_multiblock.lua",
 	"mc/api/sh_api.lua",
+	"mc/sh_footsteps.lua",
 	"mc/api/sh_manifest.lua",
 	"mc/registry/sh_builtin_api_migration.lua",
 	"mc/registry/sh_builtin_color_items.lua",
